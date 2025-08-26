@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
 import plotly.graph_objects as go
 import json
@@ -115,6 +115,35 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
         current_row = df.iloc[i]
         prev_row = df.iloc[i-1]
         
+        # --- NEW: Filter by Indian market hours (9:15 AM to 3:30 PM) ---
+        market_start = time(9, 15)
+        market_end = time(15, 30)
+        
+        current_time = current_row['Date'].time()
+        
+        if not (market_start <= current_time <= market_end):
+            # If a trade is open and market closes, close it
+            if open_trade:
+                pnl = 0
+                if open_trade['signal'] == "Buy CE":
+                    pnl = current_row['Close'] - open_trade['price']
+                elif open_trade['signal'] == "Buy PE":
+                    pnl = open_trade['price'] - current_row['Close']
+                
+                st.session_state.trade_logs.append({
+                    "Index": index_name,
+                    "Timestamp": current_row['Date'],
+                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                    "Month": current_row['Date'].strftime("%Y-%m"),
+                    "Trade": open_trade['signal'],
+                    "Entry/Exit": "Exit",
+                    "Reason": "Market Close",
+                    "Price": round(current_row['Close'], 2),
+                    "P&L": round(pnl, 2)
+                })
+                open_trade = None
+            continue # Skip to the next data point
+
         signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], threshold)
         
         # Check for open trade and exit conditions first
@@ -123,7 +152,7 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
             if open_trade['signal'] == "Buy CE":
                 pnl = current_row['Close'] - open_trade['price']
             elif open_trade['signal'] == "Buy PE":
-                pnl = open_trade['price'] - current_row['Close']
+                pnl = open_trade['price'] - open_trade['price']
             
             exit_reason = None
             if pnl <= -sl_amount:
@@ -146,7 +175,7 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
                 open_trade = None
 
         # Check for entry condition
-        if not open_trade and signal:
+        elif not open_trade and signal:
             st.session_state.trade_logs.append({
                 "Index": index_name,
                 "Timestamp": current_row['Date'],
