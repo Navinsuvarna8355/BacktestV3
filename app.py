@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 import pytz
 import plotly.graph_objects as go
 import json
@@ -54,6 +54,10 @@ if "banknifty_threshold" not in st.session_state:
 
 if "trade_logs" not in st.session_state:
     st.session_state.trade_logs = []
+if "open_nifty_trade" not in st.session_state:
+    st.session_state.open_nifty_trade = None
+if "open_banknifty_trade" not in st.session_state:
+    st.session_state.open_banknifty_trade = None
 
 # --- Sample Data Generator for 5 years ---
 def generate_sample_data(index_name, historical=False):
@@ -89,24 +93,117 @@ def get_trade_signal(current_disparity, current_disparity_ma, prev_disparity, pr
             return "Buy CE"
     return None
 
-# --- Trade Logger with P&L ---
+# --- Trade Logger with P&L calculation ---
 def log_trade(signal, price, disparity, index_name):
-    # Simulate a P&L for demonstration purposes
-    pnl = round(np.random.uniform(-500, 1000), 2)  # Random P&L between -500 and +1000
-    
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
+
+    # Calculate P&L for an exit trade
+    pnl = 0
+    trade_type = "Entry"
+    
+    if index_name == "Nifty":
+        if st.session_state.open_nifty_trade and st.session_state.open_nifty_trade['Trade'] != signal:
+            if signal == "Buy PE" and st.session_state.open_nifty_trade['Trade'] == "Buy CE":
+                pnl = st.session_state.open_nifty_trade['Price'] - price  # P&L for CE
+                trade_type = "Exit"
+            elif signal == "Buy CE" and st.session_state.open_nifty_trade['Trade'] == "Buy PE":
+                pnl = price - st.session_state.open_nifty_trade['Price']  # P&L for PE
+                trade_type = "Exit"
+            st.session_state.open_nifty_trade = None
+        
+        if trade_type == "Entry":
+            st.session_state.open_nifty_trade = {
+                "Trade": signal,
+                "Price": price
+            }
+        
+    elif index_name == "BankNifty":
+        if st.session_state.open_banknifty_trade and st.session_state.open_banknifty_trade['Trade'] != signal:
+            if signal == "Buy PE" and st.session_state.open_banknifty_trade['Trade'] == "Buy CE":
+                pnl = st.session_state.open_banknifty_trade['Price'] - price  # P&L for CE
+                trade_type = "Exit"
+            elif signal == "Buy CE" and st.session_state.open_banknifty_trade['Trade'] == "Buy PE":
+                pnl = price - st.session_state.open_banknifty_trade['Price']  # P&L for PE
+                trade_type = "Exit"
+            st.session_state.open_banknifty_trade = None
+        
+        if trade_type == "Entry":
+            st.session_state.open_banknifty_trade = {
+                "Trade": signal,
+                "Price": price
+            }
+
     st.session_state.trade_logs.append({
         "Index": index_name,
         "Timestamp": now,
         "Date": now.strftime("%Y-%m-%d"),
         "Month": now.strftime("%Y-%m"),
         "Trade": signal,
+        "Entry/Exit": trade_type,
         "Price": round(price, 2),
-        "Disparity": round(disparity, 2),
-        "P&L": pnl
+        "P&L": round(pnl, 2)
     })
+    return trade_type
+
+# --- Full Backtest Function ---
+def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
+    st.session_state.trade_logs = []
     
+    df['MA'] = df['Close'].rolling(window=ma_length).mean()
+    df['Disparity'] = (df['Close'] - df['MA']) / df['MA'] * 100
+    df['Disparity_MA'] = df['Disparity'].rolling(window=short_prd).mean()
+    df.dropna(inplace=True)
+
+    open_trade = None
+    for i in range(1, len(df)):
+        current_row = df.iloc[i]
+        prev_row = df.iloc[i-1]
+        
+        signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], threshold)
+        
+        if signal:
+            trade_type = "Entry"
+            pnl = 0
+            
+            if open_trade and open_trade['signal'] != signal:
+                if signal == "Buy PE" and open_trade['signal'] == "Buy CE":
+                    pnl = open_trade['price'] - current_row['Close']
+                elif signal == "Buy CE" and open_trade['signal'] == "Buy PE":
+                    pnl = current_row['Close'] - open_trade['price']
+                trade_type = "Exit"
+                
+                # Log the exit
+                st.session_state.trade_logs.append({
+                    "Index": index_name,
+                    "Timestamp": current_row['Date'],
+                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                    "Month": current_row['Date'].strftime("%Y-%m"),
+                    "Trade": signal,
+                    "Entry/Exit": trade_type,
+                    "Price": round(current_row['Close'], 2),
+                    "P&L": round(pnl, 2)
+                })
+                open_trade = None
+            
+            if not open_trade:
+                # Log the entry
+                st.session_state.trade_logs.append({
+                    "Index": index_name,
+                    "Timestamp": current_row['Date'],
+                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                    "Month": current_row['Date'].strftime("%Y-%m"),
+                    "Trade": signal,
+                    "Entry/Exit": "Entry",
+                    "Price": round(current_row['Close'], 2),
+                    "P&L": 0
+                })
+                open_trade = {
+                    "signal": signal,
+                    "price": current_row['Close']
+                }
+
+
 # --- Create two columns for side-by-side display ---
 col1, col2 = st.columns(2)
 
@@ -136,84 +233,22 @@ st.header("🔄 Auto Trading & ⏱️ Backtesting")
 
 backtest_col, auto_col = st.columns(2)
 with backtest_col:
-    backtest_button = st.button("▶️ Run 5-Year Backtest", key="run_backtest_button")
+    if st.button("▶️ Run 5-Year Backtest", key="run_backtest_button"):
+        st.info("Generating and backtesting 5 years of historical data. This may take a while...")
+        
+        # Nifty Backtest
+        df_nifty = generate_sample_data('Nifty', historical=True)
+        run_backtest('Nifty', df_nifty, st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold)
+        
+        # BankNifty Backtest
+        df_banknifty = generate_sample_data('BankNifty', historical=True)
+        run_backtest('BankNifty', df_banknifty, st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold)
+        st.success("Backtest completed! Results are shown below.")
+
 with auto_col:
     auto_mode = st.toggle("🔄 Auto Strategy Mode (Live Data)", value=False)
 
-
-# --- Determine which data to use based on the button/toggle ---
-if backtest_button:
-    st.info("Generating 5 years of historical data. This may take a moment...")
-    df_nifty = generate_sample_data('Nifty', historical=True)
-    df_banknifty = generate_sample_data('BankNifty', historical=True)
-    st.session_state.trade_logs = []
-    
-    # Apply strategy logic to historical data
-    df_nifty['MA'] = df_nifty['Close'].rolling(window=st.session_state.nifty_ma_length).mean()
-    df_nifty['Disparity'] = (df_nifty['Close'] - df_nifty['MA']) / df_nifty['MA'] * 100
-    df_nifty['Disparity_MA'] = df_nifty['Disparity'].rolling(window=st.session_state.nifty_short_prd).mean()
-    df_nifty.dropna(inplace=True)
-    
-    df_banknifty['MA'] = df_banknifty['Close'].rolling(window=st.session_state.banknifty_ma_length).mean()
-    df_banknifty['Disparity'] = (df_banknifty['Close'] - df_banknifty['MA']) / df_banknifty['MA'] * 100
-    df_banknifty['Disparity_MA'] = df_banknifty['Disparity'].rolling(window=st.session_state.banknifty_short_prd).mean()
-    df_banknifty.dropna(inplace=True)
-
-    # Nifty Backtest
-    for i in range(1, len(df_nifty)):
-        current_row = df_nifty.iloc[i]
-        prev_row = df_nifty.iloc[i-1]
-        nifty_signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], st.session_state.nifty_threshold)
-        if nifty_signal:
-            log_trade(nifty_signal, current_row['Close'], current_row['Disparity'], 'Nifty')
-    st.success("Nifty backtest completed!")
-    
-    # BankNifty Backtest
-    for i in range(1, len(df_banknifty)):
-        current_row = df_banknifty.iloc[i]
-        prev_row = df_banknifty.iloc[i-1]
-        banknifty_signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], st.session_state.banknifty_threshold)
-        if banknifty_signal:
-            log_trade(banknifty_signal, current_row['Close'], current_row['Disparity'], 'BankNifty')
-    st.success("BankNifty backtest completed!")
-
-# --- Auto Trading Logic ---
-if auto_mode:
-    df_nifty = generate_sample_data('Nifty')
-    df_banknifty = generate_sample_data('BankNifty')
-
-    df_nifty['MA'] = df_nifty['Close'].rolling(window=st.session_state.nifty_ma_length).mean()
-    df_nifty['Disparity'] = (df_nifty['Close'] - df_nifty['MA']) / df_nifty['MA'] * 100
-    df_nifty['Disparity_MA'] = df_nifty['Disparity'].rolling(window=st.session_state.nifty_short_prd).mean()
-    df_nifty.dropna(inplace=True)
-    
-    df_banknifty['MA'] = df_banknifty['Close'].rolling(window=st.session_state.banknifty_ma_length).mean()
-    df_banknifty['Disparity'] = (df_banknifty['Close'] - df_banknifty['MA']) / df_banknifty['MA'] * 100
-    df_banknifty['Disparity_MA'] = df_banknifty['Disparity'].rolling(window=st.session_state.banknifty_short_prd).mean()
-    df_banknifty.dropna(inplace=True)
-
-    # Nifty Crossover Check
-    if len(df_nifty) >= 2:
-        prev_row = df_nifty.iloc[-2]
-        current_row = df_nifty.iloc[-1]
-        nifty_signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], st.session_state.nifty_threshold)
-        if nifty_signal:
-            log_trade(nifty_signal, current_row['Close'], current_row['Disparity'], 'Nifty')
-            st.success(f"✅ Nifty Trade: {nifty_signal} @ {current_row['Close']:.2f}")
-
-    # BankNifty Crossover Check
-    if len(df_banknifty) >= 2:
-        prev_row = df_banknifty.iloc[-2]
-        current_row = df_banknifty.iloc[-1]
-        banknifty_signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], st.session_state.banknifty_threshold)
-        if banknifty_signal:
-            log_trade(banknifty_signal, current_row['Close'], current_row['Disparity'], 'BankNifty')
-            st.success(f"✅ BankNifty Trade: {banknifty_signal} @ {current_row['Close']:.2f}")
-
-    if not st.session_state.trade_logs:
-        st.info("No trade signal at this moment.")
-
-# --- Display Charts (Using the current data) ---
+# --- Display Charts (Using the current day's data) ---
 df_nifty_chart = generate_sample_data('Nifty')
 df_banknifty_chart = generate_sample_data('BankNifty')
 
@@ -246,18 +281,18 @@ st.header("📊 Backtest Results & P&L Analysis")
 
 if st.session_state.trade_logs:
     df_logs = pd.DataFrame(st.session_state.trade_logs)
-    df_logs["Timestamp"] = pd.to_datetime(df_logs["Timestamp"])
+    
+    # Filter for completed trades (where P&L is not 0)
+    completed_trades = df_logs[df_logs['P&L'] != 0].copy()
     
     # 1. Overall Backtest Results
-    total_pnl = df_logs["P&L"].sum()
-    winning_trades = df_logs[df_logs["P&L"] > 0].shape[0]
-    losing_trades = df_logs[df_logs["P&L"] < 0].shape[0]
-    total_trades = len(df_logs)
+    total_pnl = completed_trades["P&L"].sum()
+    winning_trades = completed_trades[completed_trades["P&L"] > 0].shape[0]
+    losing_trades = completed_trades[completed_trades["P&L"] < 0].shape[0]
+    total_trades = len(completed_trades)
     
     win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
-    total_profit = df_logs[df_logs["P&L"] > 0]["P&L"].sum()
-    total_loss = df_logs[df_logs["P&L"] < 0]["P&L"].sum()
-
+    
     st.subheader("Strategy Performance Summary")
     kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
     
@@ -270,19 +305,22 @@ if st.session_state.trade_logs:
     # 2. Daily P&L
     st.markdown("---")
     st.subheader("Daily P&L")
-    daily_pnl = df_logs.groupby("Date")["P&L"].sum().reset_index()
-    daily_pnl["Date"] = pd.to_datetime(daily_pnl["Date"]).dt.date
+    daily_pnl = completed_trades.groupby("Date")["P&L"].sum().reset_index()
+    daily_pnl.columns = ["Date", "Daily P&L"]
     st.dataframe(daily_pnl, use_container_width=True)
 
     # 3. Monthly P&L
     st.markdown("---")
     st.subheader("Monthly P&L")
-    monthly_pnl = df_logs.groupby("Month")["P&L"].sum().reset_index()
+    monthly_pnl = completed_trades.groupby("Month")["P&L"].sum().reset_index()
+    monthly_pnl.columns = ["Month", "Monthly P&L"]
     st.dataframe(monthly_pnl, use_container_width=True)
 
     # 4. Detailed Trade Logs
     st.markdown("---")
-    st.subheader("Detailed Trade Logs")
+    st.subheader("Detailed Trade Logs (All Entries and Exits)")
+    df_logs['Timestamp'] = pd.to_datetime(df_logs['Timestamp'])
+    df_logs = df_logs.sort_values(by='Timestamp', ascending=False)
     st.dataframe(df_logs, use_container_width=True)
 else:
-    st.info("📭 No trades logged yet. Click 'Run 5-Year Backtest' or toggle 'Auto Strategy Mode' to begin.")
+    st.info("📭 No trades logged yet. Click 'Run 5-Year Backtest' to see results.")
