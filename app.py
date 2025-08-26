@@ -97,7 +97,7 @@ def get_trade_signal(current_disparity, current_disparity_ma, prev_disparity, pr
             return "Buy CE"
     return None
 
-# --- Full Backtest Function ---
+# --- Full Backtest Function (Updated Logic) ---
 def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
     
     df['MA'] = df['Close'].rolling(window=ma_length).mean()
@@ -112,46 +112,43 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
         
         signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], threshold)
         
-        if signal:
-            trade_type = "Entry"
+        # New, corrected logic
+        if open_trade and signal and open_trade['signal'] != signal:
+            # This is an exit trade
             pnl = 0
+            if signal == "Buy PE" and open_trade['signal'] == "Buy CE":
+                pnl = open_trade['price'] - current_row['Close']
+            elif signal == "Buy CE" and open_trade['signal'] == "Buy PE":
+                pnl = current_row['Close'] - open_trade['price']
             
-            if open_trade and open_trade['signal'] != signal:
-                if signal == "Buy PE" and open_trade['signal'] == "Buy CE":
-                    pnl = open_trade['price'] - current_row['Close']
-                elif signal == "Buy CE" and open_trade['signal'] == "Buy PE":
-                    pnl = current_row['Close'] - open_trade['price']
-                trade_type = "Exit"
-                
-                # Log the exit
-                st.session_state.trade_logs.append({
-                    "Index": index_name,
-                    "Timestamp": current_row['Date'],
-                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
-                    "Month": current_row['Date'].strftime("%Y-%m"),
-                    "Trade": signal,
-                    "Entry/Exit": trade_type,
-                    "Price": round(current_row['Close'], 2),
-                    "P&L": round(pnl, 2)
-                })
-                open_trade = None
-            
-            if not open_trade:
-                # Log the entry
-                st.session_state.trade_logs.append({
-                    "Index": index_name,
-                    "Timestamp": current_row['Date'],
-                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
-                    "Month": current_row['Date'].strftime("%Y-%m"),
-                    "Trade": signal,
-                    "Entry/Exit": "Entry",
-                    "Price": round(current_row['Close'], 2),
-                    "P&L": 0
-                })
-                open_trade = {
-                    "signal": signal,
-                    "price": current_row['Close']
-                }
+            st.session_state.trade_logs.append({
+                "Index": index_name,
+                "Timestamp": current_row['Date'],
+                "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                "Month": current_row['Date'].strftime("%Y-%m"),
+                "Trade": open_trade['signal'],
+                "Entry/Exit": "Exit",
+                "Price": round(current_row['Close'], 2),
+                "P&L": round(pnl, 2)
+            })
+            open_trade = None
+
+        elif not open_trade and signal:
+            # This is an entry trade
+            st.session_state.trade_logs.append({
+                "Index": index_name,
+                "Timestamp": current_row['Date'],
+                "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                "Month": current_row['Date'].strftime("%Y-%m"),
+                "Trade": signal,
+                "Entry/Exit": "Entry",
+                "Price": round(current_row['Close'], 2),
+                "P&L": 0
+            })
+            open_trade = {
+                "signal": signal,
+                "price": current_row['Close']
+            }
 
 
 # --- Create two columns for side-by-side display ---
