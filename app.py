@@ -12,12 +12,14 @@ st.set_page_config(page_title="Nifty & BankNifty Dashboard", layout="wide")
 st.title("📊 Nifty & BankNifty Strategy Dashboard")
 
 # --- Function to save settings ---
-def save_settings(ma_length, short_prd, long_prd, threshold, name):
+def save_settings(ma_length, short_prd, long_prd, threshold, sl_amount, pt_amount, name):
     settings = {
         "ma_length": ma_length,
         "short_prd": short_prd,
         "long_prd": long_prd,
-        "threshold": threshold
+        "threshold": threshold,
+        "sl_amount": sl_amount,
+        "pt_amount": pt_amount
     }
     with open(f"settings_{name}.json", "w") as f:
         json.dump(settings, f)
@@ -41,6 +43,10 @@ if "nifty_long_prd" not in st.session_state:
     st.session_state.nifty_long_prd = nifty_settings["long_prd"] if nifty_settings else 6
 if "nifty_threshold" not in st.session_state:
     st.session_state.nifty_threshold = nifty_settings["threshold"] if nifty_settings else 1.5
+if "nifty_sl_amount" not in st.session_state:
+    st.session_state.nifty_sl_amount = nifty_settings["sl_amount"] if nifty_settings and "sl_amount" in nifty_settings else 600
+if "nifty_pt_amount" not in st.session_state:
+    st.session_state.nifty_pt_amount = nifty_settings["pt_amount"] if nifty_settings and "pt_amount" in nifty_settings else 1000
 
 banknifty_settings = load_settings("banknifty")
 if "banknifty_ma_length" not in st.session_state:
@@ -51,6 +57,10 @@ if "banknifty_long_prd" not in st.session_state:
     st.session_state.banknifty_long_prd = banknifty_settings["long_prd"] if banknifty_settings else 6
 if "banknifty_threshold" not in st.session_state:
     st.session_state.banknifty_threshold = banknifty_settings["threshold"] if banknifty_settings else 1.5
+if "banknifty_sl_amount" not in st.session_state:
+    st.session_state.banknifty_sl_amount = banknifty_settings["sl_amount"] if banknifty_settings and "sl_amount" in banknifty_settings else 600
+if "banknifty_pt_amount" not in st.session_state:
+    st.session_state.banknifty_pt_amount = banknifty_settings["pt_amount"] if banknifty_settings and "pt_amount" in banknifty_settings else 1000
 
 if "trade_logs" not in st.session_state:
     st.session_state.trade_logs = []
@@ -98,7 +108,7 @@ def get_trade_signal(current_disparity, current_disparity_ma, prev_disparity, pr
     return None
 
 # --- Full Backtest Function (Updated Logic) ---
-def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
+def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_amount, pt_amount):
     
     df['MA'] = df['Close'].rolling(window=ma_length).mean()
     df['Disparity'] = (df['Close'] - df['MA']) / df['MA'] * 100
@@ -112,29 +122,38 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
         
         signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], threshold)
         
-        # New, corrected logic
-        if open_trade and signal and open_trade['signal'] != signal:
-            # This is an exit trade
+        # Check for open trade and exit conditions first
+        if open_trade:
             pnl = 0
-            if signal == "Buy PE" and open_trade['signal'] == "Buy CE":
-                pnl = open_trade['price'] - current_row['Close']
-            elif signal == "Buy CE" and open_trade['signal'] == "Buy PE":
+            if open_trade['signal'] == "Buy CE":
                 pnl = current_row['Close'] - open_trade['price']
+            elif open_trade['signal'] == "Buy PE":
+                pnl = open_trade['price'] - current_row['Close']
             
-            st.session_state.trade_logs.append({
-                "Index": index_name,
-                "Timestamp": current_row['Date'],
-                "Date": current_row['Date'].strftime("%Y-%m-%d"),
-                "Month": current_row['Date'].strftime("%Y-%m"),
-                "Trade": open_trade['signal'],
-                "Entry/Exit": "Exit",
-                "Price": round(current_row['Close'], 2),
-                "P&L": round(pnl, 2)
-            })
-            open_trade = None
+            exit_reason = None
+            if pnl >= pt_amount:
+                exit_reason = "Profit Target"
+            elif pnl <= -sl_amount:
+                exit_reason = "Stop Loss"
+            elif signal and open_trade['signal'] != signal:
+                exit_reason = "Crossover Signal"
 
-        elif not open_trade and signal:
-            # This is an entry trade
+            if exit_reason:
+                st.session_state.trade_logs.append({
+                    "Index": index_name,
+                    "Timestamp": current_row['Date'],
+                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                    "Month": current_row['Date'].strftime("%Y-%m"),
+                    "Trade": open_trade['signal'],
+                    "Entry/Exit": "Exit",
+                    "Reason": exit_reason,
+                    "Price": round(current_row['Close'], 2),
+                    "P&L": round(pnl, 2)
+                })
+                open_trade = None
+
+        # Check for entry condition
+        if not open_trade and signal:
             st.session_state.trade_logs.append({
                 "Index": index_name,
                 "Timestamp": current_row['Date'],
@@ -142,6 +161,7 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
                 "Month": current_row['Date'].strftime("%Y-%m"),
                 "Trade": signal,
                 "Entry/Exit": "Entry",
+                "Reason": "Crossover Signal",
                 "Price": round(current_row['Close'], 2),
                 "P&L": 0
             })
@@ -161,8 +181,11 @@ with col1:
     st.session_state.nifty_short_prd = st.number_input("Nifty Short Period", min_value=1, max_value=20, value=st.session_state.nifty_short_prd, key="nifty_short_prd_input")
     st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, max_value=50, value=st.session_state.nifty_long_prd, key="nifty_long_prd_input")
     st.session_state.nifty_threshold = st.slider("Nifty Signal Threshold (%)", min_value=0.5, max_value=5.0, value=st.session_state.nifty_threshold, step=0.1, key="nifty_threshold_slider")
+    st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=100, max_value=5000, value=st.session_state.nifty_sl_amount, step=50, key="nifty_sl_amount_input")
+    st.session_state.nifty_pt_amount = st.number_input("Nifty Profit Target (₹)", min_value=100, max_value=5000, value=st.session_state.nifty_pt_amount, step=50, key="nifty_pt_amount_input")
+
     if st.button("💾 Save Nifty Settings", key="nifty_save_button"):
-        save_settings(st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, "nifty")
+        save_settings(st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_pt_amount, "nifty")
 
 with col2:
     st.header("BankNifty 📈")
@@ -171,8 +194,10 @@ with col2:
     st.session_state.banknifty_short_prd = st.number_input("BankNifty Short Period", min_value=1, max_value=20, value=st.session_state.banknifty_short_prd, key="banknifty_short_prd_input")
     st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, max_value=50, value=st.session_state.banknifty_long_prd, key="banknifty_long_prd_input")
     st.session_state.banknifty_threshold = st.slider("BankNifty Signal Threshold (%)", min_value=0.5, max_value=5.0, value=st.session_state.banknifty_threshold, step=0.1, key="banknifty_threshold_slider")
+    st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=100, max_value=5000, value=st.session_state.banknifty_sl_amount, step=50, key="banknifty_sl_amount_input")
+    st.session_state.banknifty_pt_amount = st.number_input("BankNifty Profit Target (₹)", min_value=100, max_value=5000, value=st.session_state.banknifty_pt_amount, step=50, key="banknifty_pt_amount_input")
     if st.button("💾 Save BankNifty Settings", key="banknifty_save_button"):
-        save_settings(st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, "banknifty")
+        save_settings(st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_pt_amount, "banknifty")
 
 # --- Auto Trading & Backtesting section ---
 st.markdown("---")
@@ -194,8 +219,8 @@ with backtest_col:
         }
 
         # Run backtest with stored data
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold)
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold)
+        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_pt_amount)
+        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_pt_amount)
         st.success("Backtest completed! Results are shown below.")
 
 with auto_col:
