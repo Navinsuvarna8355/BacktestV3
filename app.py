@@ -57,6 +57,7 @@ if "trade_logs" not in st.session_state:
 
 # --- Sample Data Generator for 5 years ---
 def generate_sample_data(index_name, historical=False):
+    np.random.seed(42)
     if historical:
         start_time = datetime.now() - timedelta(days=5*365)
         end_time = datetime.now()
@@ -88,18 +89,22 @@ def get_trade_signal(current_disparity, current_disparity_ma, prev_disparity, pr
             return "Buy CE"
     return None
 
-# --- Trade Logger ---
+# --- Trade Logger with P&L ---
 def log_trade(signal, price, disparity, index_name):
+    # Simulate a P&L for demonstration purposes
+    pnl = round(np.random.uniform(-500, 1000), 2)  # Random P&L between -500 and +1000
+    
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
     st.session_state.trade_logs.append({
         "Index": index_name,
-        "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "Date": str(now.date()),
+        "Timestamp": now,
+        "Date": now.strftime("%Y-%m-%d"),
         "Month": now.strftime("%Y-%m"),
         "Trade": signal,
         "Price": round(price, 2),
-        "Disparity": round(disparity, 2)
+        "Disparity": round(disparity, 2),
+        "P&L": pnl
     })
     
 # --- Create two columns for side-by-side display ---
@@ -128,39 +133,32 @@ with col2:
 # --- Auto Trading & Backtesting section ---
 st.markdown("---")
 st.header("🔄 Auto Trading & ⏱️ Backtesting")
-backtest_mode = st.toggle("⏱️ Backtest Mode (5 Years Historical Data)", value=False)
-auto_mode = st.toggle("🔄 Auto Strategy Mode (Live Session Data)", value=False)
 
-# --- Determine which data to use based on the toggle ---
-if backtest_mode:
+backtest_col, auto_col = st.columns(2)
+with backtest_col:
+    backtest_button = st.button("▶️ Run 5-Year Backtest", key="run_backtest_button")
+with auto_col:
+    auto_mode = st.toggle("🔄 Auto Strategy Mode (Live Data)", value=False)
+
+
+# --- Determine which data to use based on the button/toggle ---
+if backtest_button:
     st.info("Generating 5 years of historical data. This may take a moment...")
     df_nifty = generate_sample_data('Nifty', historical=True)
     df_banknifty = generate_sample_data('BankNifty', historical=True)
-else:
-    df_nifty = generate_sample_data('Nifty')
-    df_banknifty = generate_sample_data('BankNifty')
-
-# --- Apply strategy logic ---
-df_nifty['MA'] = df_nifty['Close'].rolling(window=st.session_state.nifty_ma_length).mean()
-df_nifty['Disparity'] = (df_nifty['Close'] - df_nifty['MA']) / df_nifty['MA'] * 100
-df_nifty['Disparity_MA'] = df_nifty['Disparity'].rolling(window=st.session_state.nifty_short_prd).mean()
-df_nifty.dropna(inplace=True)
-
-df_banknifty['MA'] = df_banknifty['Close'].rolling(window=st.session_state.banknifty_ma_length).mean()
-df_banknifty['Disparity'] = (df_banknifty['Close'] - df_banknifty['MA']) / df_banknifty['MA'] * 100
-df_banknifty['Disparity_MA'] = df_banknifty['Disparity'].rolling(window=st.session_state.banknifty_short_prd).mean()
-df_banknifty.dropna(inplace=True)
-
-fig_nifty = go.Figure()
-fig_nifty.add_trace(go.Scatter(x=df_nifty['Date'], y=df_nifty['Disparity'], name='Disparity Index', line=dict(color='blue', width=2)))
-fig_nifty.add_trace(go.Scatter(x=df_nifty['Date'], y=df_nifty['Disparity_MA'], name='Disparity MA', line=dict(color='green', width=2)))
-
-fig_banknifty = go.Figure()
-fig_banknifty.add_trace(go.Scatter(x=df_banknifty['Date'], y=df_banknifty['Disparity'], name='Disparity Index', line=dict(color='blue', width=2)))
-fig_banknifty.add_trace(go.Scatter(x=df_banknifty['Date'], y=df_banknifty['Disparity_MA'], name='Disparity MA', line=dict(color='green', width=2)))
-
-if st.button("▶️ Run Backtest", disabled=not backtest_mode):
     st.session_state.trade_logs = []
+    
+    # Apply strategy logic to historical data
+    df_nifty['MA'] = df_nifty['Close'].rolling(window=st.session_state.nifty_ma_length).mean()
+    df_nifty['Disparity'] = (df_nifty['Close'] - df_nifty['MA']) / df_nifty['MA'] * 100
+    df_nifty['Disparity_MA'] = df_nifty['Disparity'].rolling(window=st.session_state.nifty_short_prd).mean()
+    df_nifty.dropna(inplace=True)
+    
+    df_banknifty['MA'] = df_banknifty['Close'].rolling(window=st.session_state.banknifty_ma_length).mean()
+    df_banknifty['Disparity'] = (df_banknifty['Close'] - df_banknifty['MA']) / df_banknifty['MA'] * 100
+    df_banknifty['Disparity_MA'] = df_banknifty['Disparity'].rolling(window=st.session_state.banknifty_short_prd).mean()
+    df_banknifty.dropna(inplace=True)
+
     # Nifty Backtest
     for i in range(1, len(df_nifty)):
         current_row = df_nifty.iloc[i]
@@ -179,7 +177,21 @@ if st.button("▶️ Run Backtest", disabled=not backtest_mode):
             log_trade(banknifty_signal, current_row['Close'], current_row['Disparity'], 'BankNifty')
     st.success("BankNifty backtest completed!")
 
+# --- Auto Trading Logic ---
 if auto_mode:
+    df_nifty = generate_sample_data('Nifty')
+    df_banknifty = generate_sample_data('BankNifty')
+
+    df_nifty['MA'] = df_nifty['Close'].rolling(window=st.session_state.nifty_ma_length).mean()
+    df_nifty['Disparity'] = (df_nifty['Close'] - df_nifty['MA']) / df_nifty['MA'] * 100
+    df_nifty['Disparity_MA'] = df_nifty['Disparity'].rolling(window=st.session_state.nifty_short_prd).mean()
+    df_nifty.dropna(inplace=True)
+    
+    df_banknifty['MA'] = df_banknifty['Close'].rolling(window=st.session_state.banknifty_ma_length).mean()
+    df_banknifty['Disparity'] = (df_banknifty['Close'] - df_banknifty['MA']) / df_banknifty['MA'] * 100
+    df_banknifty['Disparity_MA'] = df_banknifty['Disparity'].rolling(window=st.session_state.banknifty_short_prd).mean()
+    df_banknifty.dropna(inplace=True)
+
     # Nifty Crossover Check
     if len(df_nifty) >= 2:
         prev_row = df_nifty.iloc[-2]
@@ -188,10 +200,6 @@ if auto_mode:
         if nifty_signal:
             log_trade(nifty_signal, current_row['Close'], current_row['Disparity'], 'Nifty')
             st.success(f"✅ Nifty Trade: {nifty_signal} @ {current_row['Close']:.2f}")
-            if nifty_signal == "Buy PE":
-                fig_nifty.add_trace(go.Scatter(x=[current_row['Date']], y=[current_row['Disparity']], mode='markers', name='Buy PE Signal', marker=dict(color='red', size=15, symbol='triangle-down')))
-            elif nifty_signal == "Buy CE":
-                fig_nifty.add_trace(go.Scatter(x=[current_row['Date']], y=[current_row['Disparity']], mode='markers', name='Buy CE Signal', marker=dict(color='green', size=15, symbol='triangle-up')))
 
     # BankNifty Crossover Check
     if len(df_banknifty) >= 2:
@@ -201,25 +209,80 @@ if auto_mode:
         if banknifty_signal:
             log_trade(banknifty_signal, current_row['Close'], current_row['Disparity'], 'BankNifty')
             st.success(f"✅ BankNifty Trade: {banknifty_signal} @ {current_row['Close']:.2f}")
-            if banknifty_signal == "Buy PE":
-                fig_banknifty.add_trace(go.Scatter(x=[current_row['Date']], y=[current_row['Disparity']], mode='markers', name='Buy PE Signal', marker=dict(color='red', size=15, symbol='triangle-down')))
-            elif banknifty_signal == "Buy CE":
-                fig_banknifty.add_trace(go.Scatter(x=[current_row['Date']], y=[current_row['Disparity']], mode='markers', name='Buy CE Signal', marker=dict(color='green', size=15, symbol='triangle-up')))
 
     if not st.session_state.trade_logs:
         st.info("No trade signal at this moment.")
 
-# --- Display Charts ---
+# --- Display Charts (Using the current data) ---
+df_nifty_chart = generate_sample_data('Nifty')
+df_banknifty_chart = generate_sample_data('BankNifty')
+
+df_nifty_chart['MA'] = df_nifty_chart['Close'].rolling(window=st.session_state.nifty_ma_length).mean()
+df_nifty_chart['Disparity'] = (df_nifty_chart['Close'] - df_nifty_chart['MA']) / df_nifty_chart['MA'] * 100
+df_nifty_chart['Disparity_MA'] = df_nifty_chart['Disparity'].rolling(window=st.session_state.nifty_short_prd).mean()
+df_nifty_chart.dropna(inplace=True)
+
+df_banknifty_chart['MA'] = df_banknifty_chart['Close'].rolling(window=st.session_state.banknifty_ma_length).mean()
+df_banknifty_chart['Disparity'] = (df_banknifty_chart['Close'] - df_banknifty_chart['MA']) / df_banknifty_chart['MA'] * 100
+df_banknifty_chart['Disparity_MA'] = df_banknifty_chart['Disparity'].rolling(window=st.session_state.banknifty_short_prd).mean()
+df_banknifty_chart.dropna(inplace=True)
+
+fig_nifty = go.Figure()
+fig_nifty.add_trace(go.Scatter(x=df_nifty_chart['Date'], y=df_nifty_chart['Disparity'], name='Disparity Index', line=dict(color='blue', width=2)))
+fig_nifty.add_trace(go.Scatter(x=df_nifty_chart['Date'], y=df_nifty_chart['Disparity_MA'], name='Disparity MA', line=dict(color='green', width=2)))
+
+fig_banknifty = go.Figure()
+fig_banknifty.add_trace(go.Scatter(x=df_banknifty_chart['Date'], y=df_banknifty_chart['Disparity'], name='Disparity Index', line=dict(color='blue', width=2)))
+fig_banknifty.add_trace(go.Scatter(x=df_banknifty_chart['Date'], y=df_banknifty_chart['Disparity_MA'], name='Disparity MA', line=dict(color='green', width=2)))
+
 with col1:
     st.plotly_chart(fig_nifty, use_container_width=True)
 with col2:
     st.plotly_chart(fig_banknifty, use_container_width=True)
 
-# --- Logs Display ---
+# --- Backtest Results & P&L Analysis ---
 st.markdown("---")
-st.header("📊 Trade Logs")
-if "trade_logs" in st.session_state and st.session_state.trade_logs:
-    daily_df = pd.DataFrame(st.session_state.trade_logs)
-    st.dataframe(daily_df, use_container_width=True)
+st.header("📊 Backtest Results & P&L Analysis")
+
+if st.session_state.trade_logs:
+    df_logs = pd.DataFrame(st.session_state.trade_logs)
+    df_logs["Timestamp"] = pd.to_datetime(df_logs["Timestamp"])
+    
+    # 1. Overall Backtest Results
+    total_pnl = df_logs["P&L"].sum()
+    winning_trades = df_logs[df_logs["P&L"] > 0].shape[0]
+    losing_trades = df_logs[df_logs["P&L"] < 0].shape[0]
+    total_trades = len(df_logs)
+    
+    win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
+    total_profit = df_logs[df_logs["P&L"] > 0]["P&L"].sum()
+    total_loss = df_logs[df_logs["P&L"] < 0]["P&L"].sum()
+
+    st.subheader("Strategy Performance Summary")
+    kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+    
+    kpi_col1.metric("Total P&L", f"₹{total_pnl:,.2f}")
+    kpi_col2.metric("Total Trades", total_trades)
+    kpi_col3.metric("Winning Trades", winning_trades)
+    kpi_col4.metric("Losing Trades", losing_trades)
+    kpi_col5.metric("Win Rate", f"{win_rate:,.2f}%")
+
+    # 2. Daily P&L
+    st.markdown("---")
+    st.subheader("Daily P&L")
+    daily_pnl = df_logs.groupby("Date")["P&L"].sum().reset_index()
+    daily_pnl["Date"] = pd.to_datetime(daily_pnl["Date"]).dt.date
+    st.dataframe(daily_pnl, use_container_width=True)
+
+    # 3. Monthly P&L
+    st.markdown("---")
+    st.subheader("Monthly P&L")
+    monthly_pnl = df_logs.groupby("Month")["P&L"].sum().reset_index()
+    st.dataframe(monthly_pnl, use_container_width=True)
+
+    # 4. Detailed Trade Logs
+    st.markdown("---")
+    st.subheader("Detailed Trade Logs")
+    st.dataframe(df_logs, use_container_width=True)
 else:
-    st.info("📭 No trades logged yet. Click 'Run Backtest' or toggle 'Auto Strategy Mode' to begin.")
+    st.info("📭 No trades logged yet. Click 'Run 5-Year Backtest' or toggle 'Auto Strategy Mode' to begin.")
