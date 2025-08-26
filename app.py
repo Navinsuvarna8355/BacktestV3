@@ -12,13 +12,14 @@ st.set_page_config(page_title="Nifty & BankNifty Dashboard", layout="wide")
 st.title("📊 Nifty & BankNifty Strategy Dashboard")
 
 # --- Function to save settings ---
-def save_settings(ma_length, short_prd, long_prd, threshold, sl_amount, name):
+def save_settings(ma_length, short_prd, long_prd, threshold, sl_amount, trail_sl_percent, name):
     settings = {
         "ma_length": ma_length,
         "short_prd": short_prd,
         "long_prd": long_prd,
         "threshold": threshold,
         "sl_amount": sl_amount,
+        "trail_sl_percent": trail_sl_percent
     }
     with open(f"settings_{name}.json", "w") as f:
         json.dump(settings, f)
@@ -44,6 +45,8 @@ if "nifty_threshold" not in st.session_state:
     st.session_state.nifty_threshold = nifty_settings["threshold"] if nifty_settings else 1.5
 if "nifty_sl_amount" not in st.session_state:
     st.session_state.nifty_sl_amount = nifty_settings["sl_amount"] if nifty_settings and "sl_amount" in nifty_settings else 600
+if "nifty_trail_sl_percent" not in st.session_state:
+    st.session_state.nifty_trail_sl_percent = nifty_settings["trail_sl_percent"] if nifty_settings and "trail_sl_percent" in nifty_settings else 0.5
 
 banknifty_settings = load_settings("banknifty")
 if "banknifty_ma_length" not in st.session_state:
@@ -56,6 +59,8 @@ if "banknifty_threshold" not in st.session_state:
     st.session_state.banknifty_threshold = banknifty_settings["threshold"] if banknifty_settings else 1.5
 if "banknifty_sl_amount" not in st.session_state:
     st.session_state.banknifty_sl_amount = banknifty_settings["sl_amount"] if banknifty_settings and "sl_amount" in banknifty_settings else 600
+if "banknifty_trail_sl_percent" not in st.session_state:
+    st.session_state.banknifty_trail_sl_percent = banknifty_settings["trail_sl_percent"] if banknifty_settings and "trail_sl_percent" in banknifty_settings else 0.5
 
 if "trade_logs" not in st.session_state:
     st.session_state.trade_logs = []
@@ -103,7 +108,7 @@ def get_trade_signal(current_disparity, current_disparity_ma, prev_disparity, pr
     return None
 
 # --- Full Backtest Function (Updated Logic) ---
-def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_amount):
+def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_amount, trail_sl_percent):
     
     df['MA'] = df['Close'].rolling(window=ma_length).mean()
     df['Disparity'] = (df['Close'] - df['MA']) / df['MA'] * 100
@@ -128,7 +133,7 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
                 if open_trade['signal'] == "Buy CE":
                     pnl = current_row['Close'] - open_trade['price']
                 elif open_trade['signal'] == "Buy PE":
-                    pnl = open_trade['price'] - current_row['Close']
+                    pnl = open_trade['price'] - current_row['price']
                 
                 st.session_state.trade_logs.append({
                     "Index": index_name,
@@ -146,33 +151,74 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
 
         signal = get_trade_signal(current_row['Disparity'], current_row['Disparity_MA'], prev_row['Disparity'], prev_row['Disparity_MA'], threshold)
         
-        # Check for open trade and exit conditions first
+        # Check for open trade and update trailing SL or exit
         if open_trade:
-            pnl = 0
+            # Update the peak/lowest price for trailing stop-loss
             if open_trade['signal'] == "Buy CE":
+                open_trade['peak_price'] = max(open_trade['peak_price'], current_row['Close'])
+                sl_level = open_trade['peak_price'] - (open_trade['peak_price'] * trail_sl_percent / 100)
                 pnl = current_row['Close'] - open_trade['price']
+                
+                if current_row['Close'] <= sl_level:
+                    st.session_state.trade_logs.append({
+                        "Index": index_name,
+                        "Timestamp": current_row['Date'],
+                        "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                        "Month": current_row['Date'].strftime("%Y-%m"),
+                        "Trade": open_trade['signal'],
+                        "Entry/Exit": "Exit",
+                        "Reason": "Trailing SL",
+                        "Price": round(current_row['Close'], 2),
+                        "P&L": round(pnl, 2)
+                    })
+                    open_trade = None
             elif open_trade['signal'] == "Buy PE":
-                pnl = open_trade['price'] - open_trade['price']
+                open_trade['lowest_price'] = min(open_trade['lowest_price'], current_row['Close'])
+                sl_level = open_trade['lowest_price'] + (open_trade['lowest_price'] * trail_sl_percent / 100)
+                pnl = open_trade['price'] - current_row['Close']
+                
+                if current_row['Close'] >= sl_level:
+                    st.session_state.trade_logs.append({
+                        "Index": index_name,
+                        "Timestamp": current_row['Date'],
+                        "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                        "Month": current_row['Date'].strftime("%Y-%m"),
+                        "Trade": open_trade['signal'],
+                        "Entry/Exit": "Exit",
+                        "Reason": "Trailing SL",
+                        "Price": round(current_row['Close'], 2),
+                        "P&L": round(pnl, 2)
+                    })
+                    open_trade = None
             
-            exit_reason = None
-            if pnl <= -sl_amount:
-                exit_reason = "Stop Loss"
-            elif signal and open_trade['signal'] != signal:
-                exit_reason = "Crossover Signal"
-
-            if exit_reason:
-                st.session_state.trade_logs.append({
-                    "Index": index_name,
-                    "Timestamp": current_row['Date'],
-                    "Date": current_row['Date'].strftime("%Y-%m-%d"),
-                    "Month": current_row['Date'].strftime("%Y-%m"),
-                    "Trade": open_trade['signal'],
-                    "Entry/Exit": "Exit",
-                    "Reason": exit_reason,
-                    "Price": round(current_row['Close'], 2),
-                    "P&L": round(pnl, 2)
-                })
-                open_trade = None
+            # Check for fixed stop-loss and crossover exit (if not already exited by trailing SL)
+            if open_trade:
+                if pnl <= -sl_amount:
+                    st.session_state.trade_logs.append({
+                        "Index": index_name,
+                        "Timestamp": current_row['Date'],
+                        "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                        "Month": current_row['Date'].strftime("%Y-%m"),
+                        "Trade": open_trade['signal'],
+                        "Entry/Exit": "Exit",
+                        "Reason": "Stop Loss",
+                        "Price": round(current_row['Close'], 2),
+                        "P&L": round(pnl, 2)
+                    })
+                    open_trade = None
+                elif signal and open_trade['signal'] != signal:
+                    st.session_state.trade_logs.append({
+                        "Index": index_name,
+                        "Timestamp": current_row['Date'],
+                        "Date": current_row['Date'].strftime("%Y-%m-%d"),
+                        "Month": current_row['Date'].strftime("%Y-%m"),
+                        "Trade": open_trade['signal'],
+                        "Entry/Exit": "Exit",
+                        "Reason": "Crossover Signal",
+                        "Price": round(current_row['Close'], 2),
+                        "P&L": round(pnl, 2)
+                    })
+                    open_trade = None
 
         # Check for entry condition
         elif not open_trade and signal:
@@ -189,7 +235,9 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
             })
             open_trade = {
                 "signal": signal,
-                "price": current_row['Close']
+                "price": current_row['Close'],
+                "peak_price": current_row['Close'],
+                "lowest_price": current_row['Close']
             }
 
 
@@ -204,9 +252,11 @@ with col1:
     st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, max_value=50, value=st.session_state.nifty_long_prd, key="nifty_long_prd_input")
     st.session_state.nifty_threshold = st.slider("Nifty Signal Threshold (%)", min_value=0.5, max_value=5.0, value=st.session_state.nifty_threshold, step=0.1, key="nifty_threshold_slider")
     st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=100, max_value=5000, value=st.session_state.nifty_sl_amount, step=50, key="nifty_sl_amount_input")
+    st.session_state.nifty_trail_sl_percent = st.slider("Nifty Trailing SL (%)", min_value=0.1, max_value=5.0, value=st.session_state.nifty_trail_sl_percent, step=0.1, key="nifty_trail_sl_percent_input")
+
 
     if st.button("💾 Save Nifty Settings", key="nifty_save_button"):
-        save_settings(st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, "nifty")
+        save_settings(st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent, "nifty")
 
 with col2:
     st.header("BankNifty 📈")
@@ -216,8 +266,9 @@ with col2:
     st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, max_value=50, value=st.session_state.banknifty_long_prd, key="banknifty_long_prd_input")
     st.session_state.banknifty_threshold = st.slider("BankNifty Signal Threshold (%)", min_value=0.5, max_value=5.0, value=st.session_state.banknifty_threshold, step=0.1, key="banknifty_threshold_slider")
     st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=100, max_value=5000, value=st.session_state.banknifty_sl_amount, step=50, key="banknifty_sl_amount_input")
+    st.session_state.banknifty_trail_sl_percent = st.slider("BankNifty Trailing SL (%)", min_value=0.1, max_value=5.0, value=st.session_state.banknifty_trail_sl_percent, step=0.1, key="banknifty_trail_sl_percent_input")
     if st.button("💾 Save BankNifty Settings", key="banknifty_save_button"):
-        save_settings(st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, "banknifty")
+        save_settings(st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent, "banknifty")
 
 # --- Auto Trading & Backtesting section ---
 st.markdown("---")
@@ -239,8 +290,8 @@ with backtest_col:
         }
 
         # Run backtest with stored data
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount)
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount)
+        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent)
+        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent)
         st.success("Backtest completed! Results are shown below.")
 
 with auto_col:
