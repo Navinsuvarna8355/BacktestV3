@@ -93,62 +93,8 @@ def get_trade_signal(current_disparity, current_disparity_ma, prev_disparity, pr
             return "Buy CE"
     return None
 
-# --- Trade Logger with P&L calculation ---
-def log_trade(signal, price, disparity, index_name):
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
-
-    # Calculate P&L for an exit trade
-    pnl = 0
-    trade_type = "Entry"
-    
-    if index_name == "Nifty":
-        if st.session_state.open_nifty_trade and st.session_state.open_nifty_trade['Trade'] != signal:
-            if signal == "Buy PE" and st.session_state.open_nifty_trade['Trade'] == "Buy CE":
-                pnl = st.session_state.open_nifty_trade['Price'] - price  # P&L for CE
-                trade_type = "Exit"
-            elif signal == "Buy CE" and st.session_state.open_nifty_trade['Trade'] == "Buy PE":
-                pnl = price - st.session_state.open_nifty_trade['Price']  # P&L for PE
-                trade_type = "Exit"
-            st.session_state.open_nifty_trade = None
-        
-        if trade_type == "Entry":
-            st.session_state.open_nifty_trade = {
-                "Trade": signal,
-                "Price": price
-            }
-        
-    elif index_name == "BankNifty":
-        if st.session_state.open_banknifty_trade and st.session_state.open_banknifty_trade['Trade'] != signal:
-            if signal == "Buy PE" and st.session_state.open_banknifty_trade['Trade'] == "Buy CE":
-                pnl = st.session_state.open_banknifty_trade['Price'] - price  # P&L for CE
-                trade_type = "Exit"
-            elif signal == "Buy CE" and st.session_state.open_banknifty_trade['Trade'] == "Buy PE":
-                pnl = price - st.session_state.open_banknifty_trade['Price']  # P&L for PE
-                trade_type = "Exit"
-            st.session_state.open_banknifty_trade = None
-        
-        if trade_type == "Entry":
-            st.session_state.open_banknifty_trade = {
-                "Trade": signal,
-                "Price": price
-            }
-
-    st.session_state.trade_logs.append({
-        "Index": index_name,
-        "Timestamp": now,
-        "Date": now.strftime("%Y-%m-%d"),
-        "Month": now.strftime("%Y-%m"),
-        "Trade": signal,
-        "Entry/Exit": trade_type,
-        "Price": round(price, 2),
-        "P&L": round(pnl, 2)
-    })
-    return trade_type
-
 # --- Full Backtest Function ---
 def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold):
-    st.session_state.trade_logs = []
     
     df['MA'] = df['Close'].rolling(window=ma_length).mean()
     df['Disparity'] = (df['Close'] - df['MA']) / df['MA'] * 100
@@ -236,6 +182,8 @@ with backtest_col:
     if st.button("▶️ Run 5-Year Backtest", key="run_backtest_button"):
         st.info("Generating and backtesting 5 years of historical data. This may take a while...")
         
+        st.session_state.trade_logs = []
+        
         # Nifty Backtest
         df_nifty = generate_sample_data('Nifty', historical=True)
         run_backtest('Nifty', df_nifty, st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold)
@@ -321,6 +269,22 @@ if st.session_state.trade_logs:
     st.subheader("Detailed Trade Logs (All Entries and Exits)")
     df_logs['Timestamp'] = pd.to_datetime(df_logs['Timestamp'])
     df_logs = df_logs.sort_values(by='Timestamp', ascending=False)
-    st.dataframe(df_logs, use_container_width=True)
+    
+    # Separate Nifty and BankNifty logs
+    nifty_logs = df_logs[df_logs['Index'] == 'Nifty']
+    banknifty_logs = df_logs[df_logs['Index'] == 'BankNifty']
+    
+    if not nifty_logs.empty:
+        st.markdown("### Nifty Trade Logs")
+        st.dataframe(nifty_logs, use_container_width=True)
+    else:
+        st.info("No Nifty trades logged.")
+    
+    if not banknifty_logs.empty:
+        st.markdown("### BankNifty Trade Logs")
+        st.dataframe(banknifty_logs, use_container_width=True)
+    else:
+        st.info("No BankNifty trades logged.")
+
 else:
     st.info("📭 No trades logged yet. Click 'Run 5-Year Backtest' to see results.")
