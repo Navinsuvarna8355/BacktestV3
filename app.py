@@ -21,18 +21,18 @@ st.header("Nifty")
 with st.expander("⚙️ Nifty Settings"):
     st.info("Nifty-specific settings can go here.")
     nifty_params = {
-        'SMA_Period': st.slider("SMA Period", 5, 50, 20),
-        'Buy_Threshold': st.slider("Buy Threshold", 1.0, 5.0, 2.5),
-        'Sell_Threshold': st.slider("Sell Threshold", -1.0, -5.0, -2.5)
+        'SMA_Period': st.slider("SMA Period", 5, 50, 20, key="nifty_sma"),
+        'Buy_Threshold': st.slider("Buy Threshold", 1.0, 5.0, 2.5, key="nifty_buy"),
+        'Sell_Threshold': st.slider("Sell Threshold", -1.0, -5.0, -2.5, key="nifty_sell")
     }
 
 st.header("BankNifty")
 with st.expander("⚙️ BankNifty Settings"):
     st.info("BankNifty-specific settings can go here.")
     banknifty_params = {
-        'SMA_Period': st.slider("SMA Period", 5, 50, 20),
-        'Buy_Threshold': st.slider("Buy Threshold", 1.0, 5.0, 2.5),
-        'Sell_Threshold': st.slider("Sell Threshold", -1.0, -5.0, -2.5)
+        'SMA_Period': st.slider("SMA Period", 5, 50, 20, key="banknifty_sma"),
+        'Buy_Threshold': st.slider("Buy Threshold", 1.0, 5.0, 2.5, key="banknifty_buy"),
+        'Sell_Threshold': st.slider("Sell Threshold", -1.0, -5.0, -2.5, key="banknifty_sell")
     }
 
 # ----------------------------
@@ -97,6 +97,16 @@ if st.button("Run Backtest", use_container_width=True):
     
     with st.spinner("Calculating..."):
         results_df, total_return, cagr, max_drawdown, sharpe_ratio = run_backtest(index_choice, backtest_period)
+        
+    st.markdown("### Performance Metrics")
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Total Return", f"{total_return:.2%}")
+    metric_cols[1].metric("CAGR", f"{cagr:.2%}")
+    metric_cols[2].metric("Max Drawdown", f"{max_drawdown:.2%}")
+    metric_cols[3].metric("Sharpe Ratio", f"{sharpe_ratio:.2f}")
+
+    st.markdown("### Equity Curve")
+    st.line_chart(results_df.set_index('Date'))        results_df, total_return, cagr, max_drawdown, sharpe_ratio = run_backtest(index_choice, backtest_period)
         
     st.markdown("### Performance Metrics")
     metric_cols = st.columns(4)
