@@ -15,17 +15,17 @@ def init_session_state():
     """Session state variables ko initialize karta hai."""
     if 'nifty_params' not in st.session_state:
         st.session_state.nifty_params = {
-            'ma_length': 20,
-            'short_prd': 3,
-            'long_prd': 6,
+            'ma_length': 29,
+            'short_prd': 27,
+            'long_prd': 81,
             'threshold': 0.5,
             'sl_amount': 500
         }
     if 'banknifty_params' not in st.session_state:
         st.session_state.banknifty_params = {
-            'ma_length': 20,
-            'short_prd': 3,
-            'long_prd': 6,
+            'ma_length': 29,
+            'short_prd': 27,
+            'long_prd': 81,
             'threshold': 0.5,
             'sl_amount': 500
         }
@@ -56,9 +56,6 @@ def calculate_indicators(df, params):
     try:
         # EMA calculate karte hain
         df_copy['EMA_Length'] = df_copy['Close'].ewm(span=params['ma_length'], adjust=False).mean()
-        
-        # Un rows ko drop karte hain jahan EMA_Length NaN hai
-        df_copy.dropna(subset=['EMA_Length'], inplace=True)
         
         # Disparity Index (DI) calculate karte hain
         df_copy['DI'] = ((df_copy['Close'] - df_copy['EMA_Length']) / df_copy['EMA_Length']) * 100
