@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import yfinance as yf
@@ -5,11 +6,13 @@ from datetime import datetime, timedelta
 
 # --- Page Setup ---
 st.set_page_config(layout="wide", page_title="Nifty & BankNifty Strategy Dashboard")
+
 st.title("📊 Nifty & BankNifty Strategy Dashboard")
 st.write("Disparity Index strategy ke saath Nifty aur BankNifty backtest karein.")
 
 # --- Session State Initialization ---
 def init_session_state():
+    """Session state variables ko initialize karta hai."""
     if 'nifty_params' not in st.session_state:
         st.session_state.nifty_params = {
             'ma_length': 29,
@@ -29,62 +32,68 @@ def init_session_state():
 
 init_session_state()
 
-# --- Fallback Data Fetch ---
+# --- Data Functions ---
 @st.cache_data
-def safe_download(symbol, start, end, retries=3):
-    for attempt in range(retries):
-        try:
-            data = yf.download(symbol, start=start, end=end)
-            if not data.empty:
-                return data
-        except Exception:
-            st.warning(f"Attempt {attempt+1}: {symbol} fetch failed — retrying...")
-    st.error(f"{symbol} data fetch failed after {retries} attempts.")
-    return None
+def get_historical_data(symbol, start_date, end_date):
+    """Yahoo Finance se historical data download karta hai."""
+    try:
+        data = yf.download(symbol, start=start_date, end=end_date)
+        if data.empty:
+            st.warning(f"{symbol} ka data nahi mila. Kripya symbol aur time range check karein.")
+            return None
+        return data
+    except Exception as e:
+        st.error(f"Historical data download karne mein error: {e}. Kripya sahi symbol check karein.")
+        return None
 
-# --- Indicator Calculation ---
 def calculate_indicators(df, params):
+    """Dataframe par indicators calculate karta hai."""
     if df is None or df.empty:
         return None
+    
     df_copy = df.copy()
+    
     try:
+        # EMA calculate karte hain
         df_copy['EMA_Length'] = df_copy['Close'].ewm(span=params['ma_length'], adjust=False).mean()
+        
+        # Un rows ko drop karte hain jahan EMA_Length NaN hai
         df_copy.dropna(subset=['EMA_Length'], inplace=True)
+        
+        # Disparity Index (DI) calculate karte hain
         df_copy['DI'] = ((df_copy['Close'] - df_copy['EMA_Length']) / df_copy['EMA_Length']) * 100
+        
+        # HSP short aur long period calculate karte hain
         df_copy['hsp_short'] = df_copy['DI'].ewm(span=params['short_prd'], adjust=False).mean()
         df_copy['hsp_long'] = df_copy['DI'].ewm(span=params['long_prd'], adjust=False).mean()
+        
+        # Final NaN values ko drop karte hain
         df_copy.dropna(inplace=True)
+        
     except Exception as e:
-        st.error(f"Indicators calculate karne mein error hua: {e}")
+        st.error(f"Indicators calculate karne mein error hua: {e}. Kripya parameters check karein.")
         return None
+    
     return df_copy
-
-# --- Trade Log Split ---
-def split_trade_log(trade_log):
-    df_log = pd.DataFrame(trade_log)
-    df_log['buy_date'] = pd.to_datetime(df_log['buy_date'])
-    df_log['month'] = df_log['buy_date'].dt.to_period('M')
-    df_log['day'] = df_log['buy_date'].dt.date
-    daily_log = df_log.groupby('day').agg({'pnl': 'sum', 'buy_price': 'count'}).rename(columns={'buy_price': 'trades'})
-    monthly_log = df_log.groupby('month').agg({'pnl': 'sum', 'buy_price': 'count'}).rename(columns={'buy_price': 'trades'})
-    return df_log, daily_log, monthly_log
 
 # --- Backtest Logic ---
 def run_backtest_logic(index_name, df, params):
+    """Diye gaye parameters ke hisab se backtest run karta hai."""
     if df is None or df.empty:
         st.warning(f"{index_name} ka backtest nahi chal paya kyuki data available nahi hai.")
         return
 
     st.write(f"📈 **{index_name} Backtest Results**")
     st.subheader(f"Strategy Signals ({index_name})")
-
+    
     initial_capital = 100000
     trade_log = []
     in_trade = False
     open_trade = {}
-
+    
     for i, (index, row) in enumerate(df.iterrows()):
         if in_trade:
+            # Absolute Stop Loss logic
             if (row['Close'] - open_trade['buy_price']) < -params['sl_amount']:
                 reason = "Absolute SL"
                 trade_log.append({
@@ -99,11 +108,13 @@ def run_backtest_logic(index_name, df, params):
                 open_trade = {}
                 continue
 
+        # Buy Signal
         if row['hsp_short'] > row['hsp_long'] and not in_trade and (row['hsp_short'] - row['hsp_long']) >= params['threshold']:
             st.write(f"💼 **Buy Signal:** {index.strftime('%Y-%m-%d')} par trade shuru @ ₹{row['Close']:.2f}")
             open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
             in_trade = True
-
+        
+        # Sell Signal
         elif row['hsp_short'] < row['hsp_long'] and in_trade:
             st.write(f"🛑 **Sell Signal:** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
             trade_log.append({
@@ -127,19 +138,12 @@ def run_backtest_logic(index_name, df, params):
     st.metric("Total Trades", len(trade_log))
 
     if trade_log:
-        df_log, daily_log, monthly_log = split_trade_log(trade_log)
-        st.subheader("📜 Trade History")
-        st.dataframe(df_log)
-
-        st.subheader("📅 Daily Summary")
-        st.dataframe(daily_log)
-
-        st.subheader("🗓️ Monthly Summary")
-        st.dataframe(monthly_log)
+        st.subheader("Trade History")
+        st.dataframe(pd.DataFrame(trade_log))
     else:
         st.write("Is strategy ke liye koi trade nahi mila.")
 
-# --- UI Config Inputs ---
+# --- Main Logic ---
 st.subheader("Nifty 📈")
 with st.expander("⚙️ Nifty Settings"):
     st.session_state.nifty_params['ma_length'] = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_params['ma_length'])
@@ -156,5 +160,28 @@ with st.expander("⚙️ BankNifty Settings"):
     st.session_state.banknifty_params['threshold'] = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_params['threshold'])
     st.session_state.banknifty_params['sl_amount'] = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_params['sl_amount'])
 
-# --- Main Execution ---
-st.header("🔄 Auto Trading &
+st.header("🔄 Auto Trading & ⏱️ Backtesting")
+run_backtest_button = st.button("Run Backtest", key="run_all")
+
+if run_backtest_button:
+    st.write("Generating and backtesting 5 years of historical data. This may take a while...")
+
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=5 * 365)
+    
+    df_nifty = get_historical_data("^NSEI", start_date, end_date)
+    df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
+
+    if df_nifty is not None and not df_nifty.empty:
+        df_nifty_calculated = calculate_indicators(df_nifty, st.session_state.nifty_params)
+        run_backtest_logic('Nifty', df_nifty_calculated, st.session_state.nifty_params)
+    else:
+        st.error("Nifty data download karne mein error hua ya data empty hai.")
+
+    st.write("---")
+
+    if df_banknifty is not None and not df_banknifty.empty:
+        df_banknifty_calculated = calculate_indicators(df_banknifty, st.session_state.banknifty_params)
+        run_backtest_logic('BankNifty', df_banknifty_calculated, st.session_state.banknifty_params)
+    else:
+        st.error("BankNifty data download karne mein error hua ya data empty hai.")
