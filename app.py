@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # --- Page Setup ---
 st.set_page_config(layout="wide", page_title="Nifty & BankNifty Strategy Dashboard")
@@ -37,7 +39,6 @@ init_session_state()
 def get_historical_data(symbol, start_date, end_date):
     """Yahoo Finance se historical data download karta hai."""
     try:
-        # Pura data download karein, taaki humari calculations sahi ho.
         data = yf.download(symbol, start=start_date, end=end_date, progress=False)
         if data.empty:
             st.warning(f"{symbol} ka data nahi mila. Kripya symbol aur time range check karein.")
@@ -74,7 +75,7 @@ def calculate_indicators(df, params):
     
     return df_copy
 
-# --- Trade Log Split (Naya Function) ---
+# --- Trade Log Split ---
 def split_trade_log(trade_log):
     """Trade log ko daily aur monthly summary mein split karta hai."""
     df_log = pd.DataFrame(trade_log)
@@ -98,7 +99,6 @@ def run_backtest_logic(index_name, df, params):
         return
 
     st.write(f"📈 **{index_name} Backtest Results**")
-    st.subheader(f"Strategy Signals ({index_name})")
     
     initial_capital = 100000
     trade_log = []
@@ -109,7 +109,6 @@ def run_backtest_logic(index_name, df, params):
         if in_trade:
             # Absolute Stop Loss logic
             if (row['Close'] - open_trade['buy_price']) < -params['sl_amount']:
-                reason = "Absolute SL"
                 trade_log.append({
                     'buy_date': open_trade['buy_date'],
                     'buy_price': open_trade['buy_price'],
@@ -123,22 +122,22 @@ def run_backtest_logic(index_name, df, params):
 
         # Buy Signal
         if row['hsp_short'] > row['hsp_long'] and not in_trade and (row['hsp_short'] - row['hsp_long']) >= params['threshold']:
-            open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
+            open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close'], 'signal_type': 'Buy'}
+            trade_log.append(open_trade)
             in_trade = True
         
         # Sell Signal
         elif row['hsp_short'] < row['hsp_long'] and in_trade:
             trade_log.append({
-                'buy_date': open_trade['buy_date'],
-                'buy_price': open_trade['buy_price'],
                 'sell_date': index.strftime('%Y-%m-%d'),
                 'sell_price': row['Close'],
                 'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital / open_trade['buy_price'])
             })
             in_trade = False
             open_trade = {}
-
-    final_pnl = sum(trade['pnl'] for trade in trade_log)
+    
+    # Final Backtest Report
+    final_pnl = sum(trade['pnl'] for trade in trade_log if 'pnl' in trade)
     total_return = (final_pnl / initial_capital) * 100
 
     st.subheader("Final Backtest Report")
@@ -146,12 +145,15 @@ def run_backtest_logic(index_name, df, params):
     col1.metric("Initial Capital", f"₹{initial_capital:.2f}")
     col2.metric("Total P&L", f"₹{final_pnl:.2f}")
     col3.metric("Total Return", f"{total_return:.2f}%")
-    st.metric("Total Trades", len(trade_log))
+    st.metric("Total Trades", len([t for t in trade_log if 'pnl' in t]))
 
-    if trade_log:
-        df_log, daily_log, monthly_log = split_trade_log(trade_log)
+    if [t for t in trade_log if 'pnl' in t]:
+        df_log = pd.DataFrame([t for t in trade_log if 'pnl' in t])
+        
         st.subheader("📜 Trade History")
         st.dataframe(df_log)
+        
+        _, daily_log, monthly_log = split_trade_log(df_log)
         
         st.subheader("📅 Daily Summary")
         st.dataframe(daily_log)
@@ -161,22 +163,71 @@ def run_backtest_logic(index_name, df, params):
     else:
         st.write("Is strategy ke liye koi trade nahi mila.")
 
+# --- Charting Logic ---
+def plot_chart(df, title):
+    """Candlestick chart par buy/sell signals plot karta hai."""
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, 
+                        row_heights=[0.7, 0.3], subplot_titles=(f"{title} Price Chart", "Disparity Index"))
+    
+    # Candlestick chart
+    fig.add_trace(go.Candlestick(x=df.index,
+                                 open=df['Open'],
+                                 high=df['High'],
+                                 low=df['Low'],
+                                 close=df['Close'],
+                                 name='Price'),
+                  row=1, col=1)
+    
+    # Buy Signals (upward arrows)
+    buy_signals = df[df['hsp_short'] > df['hsp_long']]
+    buy_signals = buy_signals[buy_signals['hsp_short'] - buy_signals['hsp_long'] >= 0.5]
+    if not buy_signals.empty:
+      fig.add_trace(go.Scatter(x=buy_signals.index,
+                               y=buy_signals['Close'],
+                               mode='markers',
+                               marker_symbol='triangle-up',
+                               marker_color='green',
+                               marker_size=10,
+                               name='Buy Signal'),
+                    row=1, col=1)
+
+    # Sell Signals (downward arrows)
+    sell_signals = df[df['hsp_short'] < df['hsp_long']]
+    if not sell_signals.empty:
+      fig.add_trace(go.Scatter(x=sell_signals.index,
+                               y=sell_signals['Close'],
+                               mode='markers',
+                               marker_symbol='triangle-down',
+                               marker_color='red',
+                               marker_size=10,
+                               name='Sell Signal'),
+                    row=1, col=1)
+    
+    # DI aur HSP chart
+    fig.add_trace(go.Scatter(x=df.index, y=df['DI'], name='DI', line=dict(color='orange')), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['hsp_short'], name='HSP Short', line=dict(color='blue')), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['hsp_long'], name='HSP Long', line=dict(color='red')), row=2, col=1)
+    
+    fig.update_layout(xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+
 # --- UI Config Inputs ---
 st.subheader("Nifty 📈")
 with st.expander("⚙️ Nifty Settings"):
-    st.session_state.nifty_params['ma_length'] = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_params['ma_length'])
-    st.session_state.nifty_params['short_prd'] = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_params['short_prd'])
-    st.session_state.nifty_params['long_prd'] = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_params['long_prd'])
-    st.session_state.nifty_params['threshold'] = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_params['threshold'])
-    st.session_state.nifty_params['sl_amount'] = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_params['sl_amount'])
+    st.session_state.nifty_params['ma_length'] = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_params['ma_length'], key="nifty_ma")
+    st.session_state.nifty_params['short_prd'] = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_params['short_prd'], key="nifty_short")
+    st.session_state.nifty_params['long_prd'] = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_params['long_prd'], key="nifty_long")
+    st.session_state.nifty_params['threshold'] = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_params['threshold'], key="nifty_threshold")
+    st.session_state.nifty_params['sl_amount'] = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_params['sl_amount'], key="nifty_sl")
 
 st.subheader("BankNifty 📈")
 with st.expander("⚙️ BankNifty Settings"):
-    st.session_state.banknifty_params['ma_length'] = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_params['ma_length'])
-    st.session_state.banknifty_params['short_prd'] = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_params['short_prd'])
-    st.session_state.banknifty_params['long_prd'] = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_params['long_prd'])
-    st.session_state.banknifty_params['threshold'] = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_params['threshold'])
-    st.session_state.banknifty_params['sl_amount'] = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_params['sl_amount'])
+    st.session_state.banknifty_params['ma_length'] = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_params['ma_length'], key="banknifty_ma")
+    st.session_state.banknifty_params['short_prd'] = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_params['short_prd'], key="banknifty_short")
+    st.session_state.banknifty_params['long_prd'] = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_params['long_prd'], key="banknifty_long")
+    st.session_state.banknifty_params['threshold'] = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_params['threshold'], key="banknifty_threshold")
+    st.session_state.banknifty_params['sl_amount'] = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_params['sl_amount'], key="banknifty_sl")
 
 # --- Main Execution ---
 st.header("🔄 Auto Trading & ⏱️ Backtesting")
@@ -194,6 +245,8 @@ if run_backtest_button:
     if df_nifty is not None and not df_nifty.empty:
         df_nifty_calculated = calculate_indicators(df_nifty, st.session_state.nifty_params)
         run_backtest_logic('Nifty', df_nifty_calculated, st.session_state.nifty_params)
+        if df_nifty_calculated is not None:
+            plot_chart(df_nifty_calculated, 'Nifty 50')
     else:
         st.error("Nifty data download karne mein error hua ya data empty hai.")
 
@@ -202,5 +255,7 @@ if run_backtest_button:
     if df_banknifty is not None and not df_banknifty.empty:
         df_banknifty_calculated = calculate_indicators(df_banknifty, st.session_state.banknifty_params)
         run_backtest_logic('BankNifty', df_banknifty_calculated, st.session_state.banknifty_params)
+        if df_banknifty_calculated is not None:
+            plot_chart(df_banknifty_calculated, 'BankNifty')
     else:
         st.error("BankNifty data download karne mein error hua ya data empty hai.")
