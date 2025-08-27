@@ -12,20 +12,24 @@ st.write("Disparity Index strategy ke saath Nifty aur BankNifty backtest karein.
 
 # --- Session State Initialization ---
 def init_session_state():
-    if 'nifty_ma_length' not in st.session_state:
-        st.session_state.nifty_ma_length = 29
-        st.session_state.nifty_short_prd = 27
-        st.session_state.nifty_long_prd = 81
-        st.session_state.nifty_threshold = 0.5
-        st.session_state.nifty_sl_amount = 500
-        st.session_state.nifty_trail_sl_percent = 5
-    if 'banknifty_ma_length' not in st.session_state:
-        st.session_state.banknifty_ma_length = 29
-        st.session_state.banknifty_short_prd = 27
-        st.session_state.banknifty_long_prd = 81
-        st.session_state.banknifty_threshold = 0.5
-        st.session_state.banknifty_sl_amount = 500
-        st.session_state.banknifty_trail_sl_percent = 5
+    if 'nifty_params' not in st.session_state:
+        st.session_state.nifty_params = {
+            'ma_length': 29,
+            'short_prd': 27,
+            'long_prd': 81,
+            'threshold': 0.5,
+            'sl_amount': 500,
+            'trail_sl_percent': 5
+        }
+    if 'banknifty_params' not in st.session_state:
+        st.session_state.banknifty_params = {
+            'ma_length': 29,
+            'short_prd': 27,
+            'long_prd': 81,
+            'threshold': 0.5,
+            'sl_amount': 500,
+            'trail_sl_percent': 5
+        }
 
 init_session_state()
 
@@ -42,52 +46,37 @@ def get_historical_data(symbol, start_date, end_date):
         st.error(f"Data download karte samay error hua: {e}. Kripya sahi symbol check karein.")
         return None
 
-def calculate_indicators(df, length, short_period, long_period):
-    if df is None or df.empty:
-        return None
-    
-    # Calculate EMA
-    df['EMA_Length'] = df['Close'].ewm(span=length, adjust=False).mean()
+def calculate_indicators(df, params):
+    df['EMA_Length'] = df['Close'].ewm(span=params['ma_length'], adjust=False).mean()
     df.dropna(subset=['EMA_Length'], inplace=True)
     
-    # Calculate DI
     df['DI'] = ((df['Close'] - df['EMA_Length']) / df['EMA_Length']) * 100
-
-    # Calculate hsp_short and hsp_long
-    df['hsp_short'] = df['DI'].ewm(span=short_period, adjust=False).mean()
-    df['hsp_long'] = df['DI'].ewm(span=long_period, adjust=False).mean()
     
-    # Drop initial NaN values
+    df['hsp_short'] = df['DI'].ewm(span=params['short_prd'], adjust=False).mean()
+    df['hsp_long'] = df['DI'].ewm(span=params['long_prd'], adjust=False).mean()
+    
     df.dropna(inplace=True)
     return df
 
 # --- Backtest Logic ---
-def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_amount, trail_sl_percent):
-    if df is None or df.empty:
-        st.write(f"📈 **{index_name} Backtest Results**")
-        st.warning(f"{index_name} ke liye data available nahi hai.")
-        return
-
-    # Calculate indicators and handle empty dataframe
-    df = calculate_indicators(df, ma_length, short_prd, long_prd)
-    if df is None or df.empty:
-        st.write(f"📈 **{index_name} Backtest Results**")
-        st.warning(f"{index_name} ke liye indicators calculate nahi ho paye.")
-        return
-
-    # Backtest logic
+def run_backtest_logic(index_name, df, params):
+    st.write(f"📈 **{index_name} Backtest Results**")
+    st.subheader(f"Strategy Signals ({index_name})")
+    
     initial_capital = 100000
     trade_log = []
     in_trade = False
     open_trade = {}
     
+    df['Signal'] = (df['hsp_short'] > df['hsp_long']).astype(int)
+    
     for i, (index, row) in enumerate(df.iterrows()):
-        # Stop Loss & Trailing Stop Loss logic
         if in_trade:
+            # Stop Loss & Trailing Stop Loss
             current_profit = row['Close'] - open_trade['buy_price']
             
-            # Absolute Stop Loss
-            if current_profit < 0 and abs(current_profit) >= sl_amount:
+            if current_profit < 0 and abs(current_profit) >= params['sl_amount']:
+                # Absolute Stop Loss
                 trade_log.append({
                     'buy_date': open_trade['buy_date'],
                     'buy_price': open_trade['buy_price'],
@@ -99,10 +88,10 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
                 in_trade = False
                 open_trade = {}
                 continue
-
-            # Trailing Stop Loss
-            trail_sl_price = open_trade['buy_price'] * (1 + (trail_sl_percent / 100))
+            
+            trail_sl_price = open_trade['buy_price'] * (1 + (params['trail_sl_percent'] / 100))
             if current_profit > 0 and row['Close'] < trail_sl_price:
+                # Trailing Stop Loss
                 trade_log.append({
                     'buy_date': open_trade['buy_date'],
                     'buy_price': open_trade['buy_price'],
@@ -116,7 +105,7 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
                 continue
 
         # Buy Signal
-        if row['hsp_short'] > row['hsp_long'] and not in_trade and (row['hsp_short'] - row['hsp_long']) >= threshold:
+        if row['hsp_short'] > row['hsp_long'] and not in_trade and (row['hsp_short'] - row['hsp_long']) >= params['threshold']:
             st.write(f"💼 **Buy Signal:** {index.strftime('%Y-%m-%d')} par trade shuru @ ₹{row['Close']:.2f}")
             open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
             in_trade = True
@@ -134,8 +123,7 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
             in_trade = False
             open_trade = {}
 
-    # Final P&L calculation
-    final_pnl = sum([trade['pnl'] for trade in trade_log])
+    final_pnl = sum(trade['pnl'] for trade in trade_log)
     total_return = (final_pnl / initial_capital) * 100
 
     st.subheader("Final Backtest Report")
@@ -154,21 +142,21 @@ def run_backtest(index_name, df, ma_length, short_prd, long_prd, threshold, sl_a
 # --- Main Logic ---
 st.subheader("Nifty 📈")
 with st.expander("⚙️ Nifty Settings"):
-    st.session_state.nifty_ma_length = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_ma_length, key='nifty_ma_length_input')
-    st.session_state.nifty_short_prd = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_short_prd, key='nifty_short_prd_input')
-    st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_long_prd, key='nifty_long_prd_input')
-    st.session_state.nifty_threshold = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_threshold, key='nifty_threshold_input')
-    st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_sl_amount, key='nifty_sl_amount_input')
-    st.session_state.nifty_trail_sl_percent = st.number_input("Nifty Trailing SL (%)", min_value=0, value=st.session_state.nifty_trail_sl_percent, key='nifty_trail_sl_percent_input')
+    st.session_state.nifty_params['ma_length'] = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_params['ma_length'])
+    st.session_state.nifty_params['short_prd'] = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_params['short_prd'])
+    st.session_state.nifty_params['long_prd'] = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_params['long_prd'])
+    st.session_state.nifty_params['threshold'] = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_params['threshold'])
+    st.session_state.nifty_params['sl_amount'] = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_params['sl_amount'])
+    st.session_state.nifty_params['trail_sl_percent'] = st.number_input("Nifty Trailing SL (%)", min_value=0, value=st.session_state.nifty_params['trail_sl_percent'])
 
 st.subheader("BankNifty 📈")
 with st.expander("⚙️ BankNifty Settings"):
-    st.session_state.banknifty_ma_length = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_ma_length, key='banknifty_ma_length_input')
-    st.session_state.banknifty_short_prd = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_short_prd, key='banknifty_short_prd_input')
-    st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_long_prd, key='banknifty_long_prd_input')
-    st.session_state.banknifty_threshold = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_threshold, key='banknifty_threshold_input')
-    st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_sl_amount, key='banknifty_sl_amount_input')
-    st.session_state.banknifty_trail_sl_percent = st.number_input("BankNifty Trailing SL (%)", min_value=0, value=st.session_state.banknifty_trail_sl_percent, key='banknifty_trail_sl_percent_input')
+    st.session_state.banknifty_params['ma_length'] = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_params['ma_length'])
+    st.session_state.banknifty_params['short_prd'] = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_params['short_prd'])
+    st.session_state.banknifty_params['long_prd'] = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_params['long_prd'])
+    st.session_state.banknifty_params['threshold'] = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_params['threshold'])
+    st.session_state.banknifty_params['sl_amount'] = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_params['sl_amount'])
+    st.session_state.banknifty_params['trail_sl_percent'] = st.number_input("BankNifty Trailing SL (%)", min_value=0, value=st.session_state.banknifty_params['trail_sl_percent'])
 
 st.header("🔄 Auto Trading & ⏱️ Backtesting")
 run_backtest_button = st.button("Run Backtest", key="run_all")
@@ -183,392 +171,15 @@ if run_backtest_button:
     df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
 
     if df_nifty is not None and not df_nifty.empty:
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent)
+        df_nifty = calculate_indicators(df_nifty.copy(), st.session_state.nifty_params)
+        run_backtest_logic('Nifty', df_nifty, st.session_state.nifty_params)
     else:
         st.error("Nifty data download karne mein error hua ya data empty hai.")
 
     st.write("---")
 
     if df_banknifty is not None and not df_banknifty.empty:
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent)
+        df_banknifty = calculate_indicators(df_banknifty.copy(), st.session_state.banknifty_params)
+        run_backtest_logic('BankNifty', df_banknifty, st.session_state.banknifty_params)
     else:
         st.error("BankNifty data download karne mein error hua ya data empty hai.")
-                    'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                })
-                in_trade = False
-                open_trade = {}
-            elif current_profit > 0:
-                # Trailing stop loss
-                trail_sl_price = open_trade['buy_price'] + (open_trade['buy_price'] * (trail_sl_percent / 100))
-                if row['Close'] < trail_sl_price:
-                    st.write(f"🛑 **Stop Loss (Trailing):** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-                    trade_log.append({
-                        'buy_date': open_trade['buy_date'],
-                        'buy_price': open_trade['buy_price'],
-                        'sell_date': index.strftime('%Y-%m-%d'),
-                        'sell_price': row['Close'],
-                        'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                    })
-                    in_trade = False
-                    open_trade = {}
-        
-        # Check for buy signal
-        if row['hsp_short'] > row['hsp_long'] and not in_trade:
-            if row['hsp_short'] - row['hsp_long'] >= threshold:
-                st.write(f"💼 **Buy Signal:** {index.strftime('%Y-%m-%d')} par trade shuru @ ₹{row['Close']:.2f}")
-                open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
-                in_trade = True
-        
-        # Check for sell signal
-        elif row['hsp_short'] < row['hsp_long'] and in_trade:
-            st.write(f"🛑 **Sell Signal:** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-            trade_log.append({
-                'buy_date': open_trade['buy_date'],
-                'buy_price': open_trade['buy_price'],
-                'sell_date': index.strftime('%Y-%m-%d'),
-                'sell_price': row['Close'],
-                'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-            })
-            in_trade = False
-            open_trade = {}
-
-    # Final P&L calculation
-    final_pnl = sum([trade['pnl'] for trade in trade_log])
-    total_return = (final_pnl / initial_capital) * 100
-
-    st.subheader("Final Backtest Report")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Initial Capital", f"₹{initial_capital:.2f}")
-    col2.metric("Total P&L", f"₹{final_pnl:.2f}")
-    col3.metric("Total Return", f"{total_return:.2f}%")
-    st.metric("Total Trades", len(trade_log))
-
-    if trade_log:
-        st.subheader("Trade History")
-        st.dataframe(pd.DataFrame(trade_log))
-    else:
-        st.write("Is strategy ke liye koi trade nahi mila.")
-
-# --- Main Logic ---
-st.subheader("Nifty 📈")
-with st.expander("⚙️ Nifty Settings"):
-    st.session_state.nifty_ma_length = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_ma_length)
-    st.session_state.nifty_short_prd = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_short_prd)
-    st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_long_prd)
-    st.session_state.nifty_threshold = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_threshold)
-    st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_sl_amount)
-    st.session_state.nifty_trail_sl_percent = st.number_input("Nifty Trailing SL (%)", min_value=0, value=st.session_state.nifty_trail_sl_percent)
-
-st.subheader("BankNifty 📈")
-with st.expander("⚙️ BankNifty Settings"):
-    st.session_state.banknifty_ma_length = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_ma_length)
-    st.session_state.banknifty_short_prd = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_short_prd)
-    st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_long_prd)
-    st.session_state.banknifty_threshold = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_threshold)
-    st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_sl_amount)
-    st.session_state.banknifty_trail_sl_percent = st.number_input("BankNifty Trailing SL (%)", min_value=0, value=st.session_state.banknifty_trail_sl_percent)
-
-st.header("🔄 Auto Trading & ⏱️ Backtesting")
-run_backtest_button = st.button("Run Backtest", key="run_all")
-
-if run_backtest_button:
-    st.write("Generating and backtesting 5 years of historical data. This may take a while...")
-
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5 * 365) # 5 saal ka data
-    
-    df_nifty = get_historical_data("^NSEI", start_date, end_date)
-    df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
-
-    if df_nifty is not None and not df_nifty.empty:
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent)
-    else:
-        st.error("Nifty data download karne mein error hua.")
-
-    st.write("---")
-
-    if df_banknifty is not None and not df_banknifty.empty:
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent)
-    else:
-        st.error("BankNifty data download karne mein error hua.")
-                    'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                })
-                in_trade = False
-                open_trade = {}
-            elif current_profit > 0:
-                # Trailing stop loss
-                trail_sl_price = open_trade['buy_price'] + (open_trade['buy_price'] * (trail_sl_percent / 100))
-                if row['Close'] < trail_sl_price:
-                    st.write(f"🛑 **Stop Loss (Trailing):** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-                    trade_log.append({
-                        'buy_date': open_trade['buy_date'],
-                        'buy_price': open_trade['buy_price'],
-                        'sell_date': index.strftime('%Y-%m-%d'),
-                        'sell_price': row['Close'],
-                        'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                    })
-                    in_trade = False
-                    open_trade = {}
-        
-        # Check for buy signal
-        if row['hsp_short'] > row['hsp_long'] and not in_trade:
-            if row['hsp_short'] - row['hsp_long'] >= threshold:
-                st.write(f"💼 **Buy Signal:** {index.strftime('%Y-%m-%d')} par trade shuru @ ₹{row['Close']:.2f}")
-                open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
-                in_trade = True
-        
-        # Check for sell signal
-        elif row['hsp_short'] < row['hsp_long'] and in_trade:
-            st.write(f"🛑 **Sell Signal:** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-            trade_log.append({
-                'buy_date': open_trade['buy_date'],
-                'buy_price': open_trade['buy_price'],
-                'sell_date': index.strftime('%Y-%m-%d'),
-                'sell_price': row['Close'],
-                'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-            })
-            in_trade = False
-            open_trade = {}
-
-    # Final P&L calculation
-    final_pnl = sum([trade['pnl'] for trade in trade_log])
-    total_return = (final_pnl / initial_capital) * 100
-
-    st.subheader("Final Backtest Report")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Initial Capital", f"₹{initial_capital:.2f}")
-    col2.metric("Total P&L", f"₹{final_pnl:.2f}")
-    col3.metric("Total Return", f"{total_return:.2f}%")
-    st.metric("Total Trades", len(trade_log))
-
-    if trade_log:
-        st.subheader("Trade History")
-        st.dataframe(pd.DataFrame(trade_log))
-    else:
-        st.write("Is strategy ke liye koi trade nahi mila.")
-
-# --- Main Logic ---
-st.subheader("Nifty 📈")
-with st.expander("⚙️ Nifty Settings"):
-    st.session_state.nifty_ma_length = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_ma_length)
-    st.session_state.nifty_short_prd = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_short_prd)
-    st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_long_prd)
-    st.session_state.nifty_threshold = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_threshold)
-    st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_sl_amount)
-    st.session_state.nifty_trail_sl_percent = st.number_input("Nifty Trailing SL (%)", min_value=0, value=st.session_state.nifty_trail_sl_percent)
-
-st.subheader("BankNifty 📈")
-with st.expander("⚙️ BankNifty Settings"):
-    st.session_state.banknifty_ma_length = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_ma_length)
-    st.session_state.banknifty_short_prd = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_short_prd)
-    st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_long_prd)
-    st.session_state.banknifty_threshold = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_threshold)
-    st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_sl_amount)
-    st.session_state.banknifty_trail_sl_percent = st.number_input("BankNifty Trailing SL (%)", min_value=0, value=st.session_state.banknifty_trail_sl_percent)
-
-st.header("🔄 Auto Trading & ⏱️ Backtesting")
-run_backtest_button = st.button("Run Backtest", key="run_all")
-
-if run_backtest_button:
-    st.write("Generating and backtesting 5 years of historical data. This may take a while...")
-
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5 * 365) # 5 saal ka data
-    
-    df_nifty = get_historical_data("^NSEI", start_date, end_date)
-    df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
-
-    if df_nifty is not None and not df_nifty.empty:
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent)
-    else:
-        st.error("Nifty data download karne mein error hua.")
-
-    st.write("---")
-
-    if df_banknifty is not None and not df_banknifty.empty:
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent)
-    else:
-        st.error("BankNifty data download karne mein error hua.")
-                    'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                })
-                in_trade = False
-                open_trade = {}
-            elif current_profit > 0:
-                # Trailing stop loss
-                trail_sl_price = open_trade['buy_price'] + (open_trade['buy_price'] * (trail_sl_percent / 100))
-                if row['Close'] < trail_sl_price:
-                    st.write(f"🛑 **Stop Loss (Trailing):** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-                    trade_log.append({
-                        'buy_date': open_trade['buy_date'],
-                        'buy_price': open_trade['buy_price'],
-                        'sell_date': index.strftime('%Y-%m-%d'),
-                        'sell_price': row['Close'],
-                        'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                    })
-                    in_trade = False
-                    open_trade = {}
-        
-        # Check for buy signal
-        if row['hsp_short'] > row['hsp_long'] and not in_trade:
-            if row['hsp_short'] - row['hsp_long'] >= threshold:
-                st.write(f"💼 **Buy Signal:** {index.strftime('%Y-%m-%d')} par trade shuru @ ₹{row['Close']:.2f}")
-                open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
-                in_trade = True
-        
-        # Check for sell signal
-        elif row['hsp_short'] < row['hsp_long'] and in_trade:
-            st.write(f"🛑 **Sell Signal:** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-            trade_log.append({
-                'buy_date': open_trade['buy_date'],
-                'buy_price': open_trade['buy_price'],
-                'sell_date': index.strftime('%Y-%m-%d'),
-                'sell_price': row['Close'],
-                'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-            })
-            in_trade = False
-            open_trade = {}
-
-    # Final P&L calculation
-    final_pnl = sum([trade['pnl'] for trade in trade_log])
-    total_return = (final_pnl / initial_capital) * 100
-
-    st.subheader("Final Backtest Report")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Initial Capital", f"₹{initial_capital:.2f}")
-    col2.metric("Total P&L", f"₹{final_pnl:.2f}")
-    col3.metric("Total Return", f"{total_return:.2f}%")
-    st.metric("Total Trades", len(trade_log))
-
-    if trade_log:
-        st.subheader("Trade History")
-        st.dataframe(pd.DataFrame(trade_log))
-    else:
-        st.write("Is strategy ke liye koi trade nahi mila.")
-
-# --- Main Logic ---
-st.subheader("Nifty 📈")
-with st.expander("⚙️ Nifty Settings"):
-    st.session_state.nifty_ma_length = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_ma_length)
-    st.session_state.nifty_short_prd = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_short_prd)
-    st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_long_prd)
-    st.session_state.nifty_threshold = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_threshold)
-    st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_sl_amount)
-    st.session_state.nifty_trail_sl_percent = st.number_input("Nifty Trailing SL (%)", min_value=0, value=st.session_state.nifty_trail_sl_percent)
-
-st.subheader("BankNifty 📈")
-with st.expander("⚙️ BankNifty Settings"):
-    st.session_state.banknifty_ma_length = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_ma_length)
-    st.session_state.banknifty_short_prd = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_short_prd)
-    st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_long_prd)
-    st.session_state.banknifty_threshold = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_threshold)
-    st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_sl_amount)
-    st.session_state.banknifty_trail_sl_percent = st.number_input("BankNifty Trailing SL (%)", min_value=0, value=st.session_state.banknifty_trail_sl_percent)
-
-st.header("🔄 Auto Trading & ⏱️ Backtesting")
-run_backtest_button = st.button("Run Backtest", key="run_all")
-
-if run_backtest_button:
-    st.write("Generating and backtesting 5 years of historical data. This may take a while...")
-
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5 * 365) # 5 saal ka data
-    
-    df_nifty = get_historical_data("^NSEI", start_date, end_date)
-    df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
-
-    if df_nifty is not None and not df_nifty.empty:
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent)
-    else:
-        st.error("Nifty data download karne mein error hua.")
-
-    st.write("---")
-
-    if df_banknifty is not None and not df_banknifty.empty:
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent)
-    else:
-        st.error("BankNifty data download karne mein error hua.")
-                        'sell_price': row['Close'],
-                        'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-                    })
-                    in_trade = False
-                    open_trade = {}
-        
-        # Check for buy signal
-        if row['hsp_short'] > row['hsp_long'] and not in_trade:
-            if row['hsp_short'] - row['hsp_long'] >= threshold:
-                st.write(f"💼 **Buy Signal:** {index.strftime('%Y-%m-%d')} par trade shuru @ ₹{row['Close']:.2f}")
-                open_trade = {'buy_date': index.strftime('%Y-%m-%d'), 'buy_price': row['Close']}
-                in_trade = True
-        
-        # Check for sell signal
-        elif row['hsp_short'] < row['hsp_long'] and in_trade:
-            st.write(f"🛑 **Sell Signal:** {index.strftime('%Y-%m-%d')} par trade band @ ₹{row['Close']:.2f}")
-            trade_log.append({
-                'buy_date': open_trade['buy_date'],
-                'buy_price': open_trade['buy_price'],
-                'sell_date': index.strftime('%Y-%m-%d'),
-                'sell_price': row['Close'],
-                'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital/open_trade['buy_price'])
-            })
-            in_trade = False
-            open_trade = {}
-
-    # Final P&L calculation
-    final_pnl = sum([trade['pnl'] for trade in trade_log])
-    total_return = (final_pnl / initial_capital) * 100
-
-    st.subheader("Final Backtest Report")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Initial Capital", f"₹{initial_capital:.2f}")
-    col2.metric("Total P&L", f"₹{final_pnl:.2f}")
-    col3.metric("Total Return", f"{total_return:.2f}%")
-    st.metric("Total Trades", len(trade_log))
-
-    if trade_log:
-        st.subheader("Trade History")
-        st.dataframe(pd.DataFrame(trade_log))
-    else:
-        st.write("Is strategy ke liye koi trade nahi mila.")
-
-# --- Main Logic ---
-st.subheader("Nifty 📈")
-with st.expander("⚙️ Nifty Settings"):
-    st.session_state.nifty_ma_length = st.number_input("Nifty MA Length", min_value=1, value=st.session_state.nifty_ma_length)
-    st.session_state.nifty_short_prd = st.number_input("Nifty Short Period", min_value=1, value=st.session_state.nifty_short_prd)
-    st.session_state.nifty_long_prd = st.number_input("Nifty Long Period", min_value=1, value=st.session_state.nifty_long_prd)
-    st.session_state.nifty_threshold = st.number_input("Nifty Signal Threshold (%)", min_value=0.0, value=st.session_state.nifty_threshold)
-    st.session_state.nifty_sl_amount = st.number_input("Nifty Stop Loss (₹)", min_value=0, value=st.session_state.nifty_sl_amount)
-    st.session_state.nifty_trail_sl_percent = st.number_input("Nifty Trailing SL (%)", min_value=0, value=st.session_state.nifty_trail_sl_percent)
-
-st.subheader("BankNifty 📈")
-with st.expander("⚙️ BankNifty Settings"):
-    st.session_state.banknifty_ma_length = st.number_input("BankNifty MA Length", min_value=1, value=st.session_state.banknifty_ma_length)
-    st.session_state.banknifty_short_prd = st.number_input("BankNifty Short Period", min_value=1, value=st.session_state.banknifty_short_prd)
-    st.session_state.banknifty_long_prd = st.number_input("BankNifty Long Period", min_value=1, value=st.session_state.banknifty_long_prd)
-    st.session_state.banknifty_threshold = st.number_input("BankNifty Signal Threshold (%)", min_value=0.0, value=st.session_state.banknifty_threshold)
-    st.session_state.banknifty_sl_amount = st.number_input("BankNifty Stop Loss (₹)", min_value=0, value=st.session_state.banknifty_sl_amount)
-    st.session_state.banknifty_trail_sl_percent = st.number_input("BankNifty Trailing SL (%)", min_value=0, value=st.session_state.banknifty_trail_sl_percent)
-
-st.header("🔄 Auto Trading & ⏱️ Backtesting")
-run_backtest_button = st.button("Run Backtest", key="run_all")
-
-if run_backtest_button:
-    st.write("Generating and backtesting 5 years of historical data. This may take a while...")
-
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5 * 365) # 5 saal ka data
-    
-    df_nifty = get_historical_data("^NSEI", start_date, end_date)
-    df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
-
-    if df_nifty is not None and not df_nifty.empty:
-        run_backtest('Nifty', df_nifty.copy(), st.session_state.nifty_ma_length, st.session_state.nifty_short_prd, st.session_state.nifty_long_prd, st.session_state.nifty_threshold, st.session_state.nifty_sl_amount, st.session_state.nifty_trail_sl_percent)
-    else:
-        st.error("Nifty data download karne mein error hua.")
-
-    st.write("---")
-
-    if df_banknifty is not None and not df_banknifty.empty:
-        run_backtest('BankNifty', df_banknifty.copy(), st.session_state.banknifty_ma_length, st.session_state.banknifty_short_prd, st.session_state.banknifty_long_prd, st.session_state.banknifty_threshold, st.session_state.banknifty_sl_amount, st.session_state.banknifty_trail_sl_percent)
-    else:
-        st.error("BankNifty data download karne mein error hua.")
