@@ -232,6 +232,7 @@ with st.expander("⚙️ BankNifty Settings"):
 # --- Main Execution ---
 st.header("🔄 Auto Trading & ⏱️ Backtesting")
 run_backtest_button = st.button("Run Backtest", key="run_all")
+run_5_backtests_button = st.button("Run 5 Years 5 Backtest", key="run_5_backtests")
 
 if run_backtest_button:
     st.write("Generating and backtesting 5 years of historical data. This may take a while...")
@@ -244,8 +245,8 @@ if run_backtest_button:
 
     if df_nifty is not None and not df_nifty.empty:
         df_nifty_calculated = calculate_indicators(df_nifty, st.session_state.nifty_params)
-        run_backtest_logic('Nifty', df_nifty_calculated, st.session_state.nifty_params)
         if df_nifty_calculated is not None:
+            run_backtest_logic('Nifty', df_nifty_calculated, st.session_state.nifty_params)
             plot_chart(df_nifty_calculated, 'Nifty 50')
     else:
         st.error("Nifty data download karne mein error hua ya data empty hai.")
@@ -254,8 +255,33 @@ if run_backtest_button:
 
     if df_banknifty is not None and not df_banknifty.empty:
         df_banknifty_calculated = calculate_indicators(df_banknifty, st.session_state.banknifty_params)
-        run_backtest_logic('BankNifty', df_banknifty_calculated, st.session_state.banknifty_params)
         if df_banknifty_calculated is not None:
+            run_backtest_logic('BankNifty', df_banknifty_calculated, st.session_state.banknifty_params)
             plot_chart(df_banknifty_calculated, 'BankNifty')
     else:
         st.error("BankNifty data download karne mein error hua ya data empty hai.")
+
+if run_5_backtests_button:
+    st.write("Starting 5 consecutive backtests for Nifty and BankNifty...")
+    
+    for i in range(5):
+        st.subheader(f"🔄 Backtest Run {i+1} (5 Years)")
+        end_date = datetime.now() - timedelta(days=i * 365)
+        start_date = end_date - timedelta(days=5 * 365)
+        
+        df_nifty = get_historical_data("^NSEI", start_date, end_date)
+        df_banknifty = get_historical_data("^NSEBANK", start_date, end_date)
+        
+        if df_nifty is not None and not df_nifty.empty:
+            df_nifty_calculated = calculate_indicators(df_nifty, st.session_state.nifty_params)
+            if df_nifty_calculated is not None:
+                run_backtest_logic(f'Nifty - Run {i+1}', df_nifty_calculated, st.session_state.nifty_params)
+                
+        st.write("---")
+        
+        if df_banknifty is not None and not df_banknifty.empty:
+            df_banknifty_calculated = calculate_indicators(df_banknifty, st.session_state.banknifty_params)
+            if df_banknifty_calculated is not None:
+                run_backtest_logic(f'BankNifty - Run {i+1}', df_banknifty_calculated, st.session_state.banknifty_params)
+                
+        st.write("---")
