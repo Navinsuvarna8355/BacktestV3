@@ -1,102 +1,39 @@
-# app.py
-import streamlit as st
-import pandas as pd
-import yfinance as yf
+import requests
 from datetime import datetime, timedelta
 
-# --- Page Setup ---
-st.set_page_config(layout="wide", page_title="Nifty & BankNifty Strategy Dashboard")
-
-st.title("📊 Nifty & BankNifty Strategy Dashboard")
-st.write("Disparity Index strategy ke saath Nifty aur BankNifty backtest karein.")
-
-# --- Session State Initialization ---
-def init_session_state():
-    """Session state variables ko initialize karta hai."""
-    if 'nifty_params' not in st.session_state:
-        st.session_state.nifty_params = {
-            'ma_length': 29,
-            'short_prd': 27,
-            'long_prd': 81,
-            'threshold': 0.5,
-            'sl_amount': 500
-        }
-    if 'banknifty_params' not in st.session_state:
-        st.session_state.banknifty_params = {
-            'ma_length': 29,
-            'short_prd': 27,
-            'long_prd': 81,
-            'threshold': 0.5,
-            'sl_amount': 500
-        }
-
-init_session_state()
-
-# --- Data Functions ---
-@st.cache_data
-def get_historical_data(symbol, start_date, end_date):
-    """Yahoo Finance se historical data download karta hai."""
+def download_bhavcopy(date):
+    # NSE bhavcopy download link ka format
+    # Example: https://archives.nseindia.com/content/historical/EQUITIES/2025/AUG/cm25AUG2025bhav.csv.zip
+    date_str = date.strftime("%d%b%Y").upper()
+    month_str = date.strftime("%b").upper()
+    year_str = date.strftime("%Y")
+    
+    url = f"https://archives.nseindia.com/content/historical/EQUITIES/{year_str}/{month_str}/cm{date_str}bhav.csv.zip"
+    
+    # File download karna
     try:
-        data = yf.download(symbol, start=start_date, end=end_date)
-        if data.empty:
-            st.warning(f"{symbol} ka data nahi mila. Kripya symbol aur time range check karein.")
+        response = requests.get(url)
+        if response.status_code == 200:
+            file_name = f"cm{date_str}bhav.csv.zip"
+            with open(file_name, 'wb') as f:
+                f.write(response.content)
+            print(f"File downloaded successfully: {file_name}")
+            return file_name
+        else:
+            print(f"Error downloading file for {date_str}: Status code {response.status_code}")
             return None
-        return data
     except Exception as e:
-        st.error(f"Historical data download karne mein error: {e}. Kripya sahi symbol check karein.")
+        print(f"An error occurred: {e}")
         return None
 
-def calculate_indicators(df, params):
-    """Dataframe par indicators calculate karta hai."""
-    if df is None or df.empty:
-        return None
-    
-    df_copy = df.copy()
-    
-    try:
-        # EMA calculate karte hain
-        df_copy['EMA_Length'] = df_copy['Close'].ewm(span=params['ma_length'], adjust=False).mean()
-        
-        # Disparity Index (DI) calculate karte hain
-        df_copy['DI'] = ((df_copy['Close'] - df_copy['EMA_Length']) / df_copy['EMA_Length']) * 100
-        
-        # HSP short aur long period calculate karte hain
-        df_copy['hsp_short'] = df_copy['DI'].ewm(span=params['short_prd'], adjust=False).mean()
-        df_copy['hsp_long'] = df_copy['DI'].ewm(span=params['long_prd'], adjust=False).mean()
-        
-        # Final NaN values ko drop karte hain
-        df_copy.dropna(inplace=True)
-        
-    except Exception as e:
-        st.error(f"Indicators calculate karne mein error hua: {e}. Kripya parameters check karein.")
-        return None
-    
-    return df_copy
+# Pura 3 saal ka data download karne ke liye
+end_date = datetime.now()
+start_date = end_date - timedelta(days=3*365) # 3 saal ka data
+current_date = start_date
 
-# --- Backtest Logic ---
-def run_backtest_logic(index_name, df, params):
-    """Diye gaye parameters ke hisab se backtest run karta hai."""
-    if df is None or df.empty:
-        st.warning(f"{index_name} ka backtest nahi chal paya kyuki data available nahi hai.")
-        return
-
-    st.write(f"📈 **{index_name} Backtest Results**")
-    st.subheader(f"Strategy Signals ({index_name})")
-    
-    initial_capital = 100000
-    trade_log = []
-    in_trade = False
-    open_trade = {}
-    
-    for i, (index, row) in enumerate(df.iterrows()):
-        if in_trade:
-            # Absolute Stop Loss logic
-            if (row['Close'] - open_trade['buy_price']) < -params['sl_amount']:
-                reason = "Absolute SL"
-                trade_log.append({
-                    'buy_date': open_trade['buy_date'],
-                    'buy_price': open_trade['buy_price'],
-                    'sell_date': index.strftime('%Y-%m-%d'),
+while current_date <= end_date:
+    download_bhavcopy(current_date)
+    current_date += timedelta(days=1)                    'sell_date': index.strftime('%Y-%m-%d'),
                     'sell_price': row['Close'],
                     'pnl': (row['Close'] - open_trade['buy_price']) * (initial_capital / open_trade['buy_price'])
                 })
