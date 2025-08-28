@@ -37,9 +37,14 @@ init_session_state()
 # --- Data Functions ---
 @st.cache_data
 def get_historical_data(symbol, start_date, end_date):
-    """Yahoo Finance se historical data download karta hai."""
+    """
+    Yahoo Finance se historical data download karta hai.
+    Puraane "yf.download" method ko naye aur behtar "yf.Ticker().history" se badla gaya hai.
+    """
     try:
-        data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(start=start_date, end=end_date, auto_adjust=False)
+        
         if data.empty:
             st.warning(f"{symbol} ka data nahi mila. Kripya symbol aur time range check karein.")
             return None
@@ -49,16 +54,21 @@ def get_historical_data(symbol, start_date, end_date):
         return None
 
 def calculate_indicators(df, params):
-    """Dataframe par indicators calculate karta hai.
-    Pichli baar ke error ko theek kiya gaya hai."""
+    """Dataframe par indicators calculate karta hai."""
     if df is None or df.empty:
         return None
     
     df_copy = df.copy()
     
     # Extra columns jaise ki 'Adj Close' ko drop karte hain jo error de sakte hain
-    df_copy = df_copy[['Open', 'High', 'Low', 'Close', 'Volume']]
+    if 'Adj Close' in df_copy.columns:
+        df_copy.drop(columns=['Adj Close'], inplace=True)
     
+    # ensure that the close column is present before calculation
+    if 'Close' not in df_copy.columns:
+        st.error("Data mein 'Close' column nahi mila. Calculation sambhav nahi hai.")
+        return None
+
     try:
         # EMA calculate karte hain
         ema_series = df_copy['Close'].ewm(span=params['ma_length'], adjust=False).mean()
