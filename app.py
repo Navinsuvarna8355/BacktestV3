@@ -49,22 +49,31 @@ def get_historical_data(symbol, start_date, end_date):
         return None
 
 def calculate_indicators(df, params):
-    """Dataframe par indicators calculate karta hai."""
+    """Dataframe par indicators calculate karta hai.
+    Pichli baar ke error ko theek kiya gaya hai."""
     if df is None or df.empty:
         return None
     
     df_copy = df.copy()
     
+    # Extra columns jaise ki 'Adj Close' ko drop karte hain jo error de sakte hain
+    df_copy = df_copy[['Open', 'High', 'Low', 'Close', 'Volume']]
+    
     try:
         # EMA calculate karte hain
-        df_copy['EMA_Length'] = df_copy['Close'].ewm(span=params['ma_length'], adjust=False).mean()
+        ema_series = df_copy['Close'].ewm(span=params['ma_length'], adjust=False).mean()
+        df_copy['EMA_Length'] = ema_series
         
-        # Disparity Index (DI) calculate karte hain
-        df_copy['DI'] = ((df_copy['Close'] - df_copy['EMA_Length']) / df_copy['EMA_Length']) * 100
+        # Disparity Index (DI) ko step-by-step calculate karte hain
+        di_series = ((df_copy['Close'] - df_copy['EMA_Length']) / df_copy['EMA_Length']) * 100
+        df_copy['DI'] = di_series
         
         # HSP short aur long period calculate karte hain
-        df_copy['hsp_short'] = df_copy['DI'].ewm(span=params['short_prd'], adjust=False).mean()
-        df_copy['hsp_long'] = df_copy['DI'].ewm(span=params['long_prd'], adjust=False).mean()
+        hsp_short_series = df_copy['DI'].ewm(span=params['short_prd'], adjust=False).mean()
+        df_copy['hsp_short'] = hsp_short_series
+        
+        hsp_long_series = df_copy['DI'].ewm(span=params['long_prd'], adjust=False).mean()
+        df_copy['hsp_long'] = hsp_long_series
         
         # Final NaN values ko drop karte hain
         df_copy.dropna(inplace=True)
